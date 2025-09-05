@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<sbml xmlns="http://www.sbml.org/sbml/level3/version2/core" level="3" version="2">
+  <model id="amounts_model" name="Species with Amounts Model">
+    <listOfCompartments>
+      <compartment id="cell" name="Cell" spatialDimensions="3" size="2.0" constant="true"/>
+    </listOfCompartments>
+    <listOfSpecies>
+      <species id="A" name="Species A" compartment="cell" initialAmount="4.0" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>
+      <species id="B" name="Species B" compartment="cell" initialAmount="2.0" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>
+    </listOfSpecies>
+    <listOfReactions>
+      <reaction id="R1" name="A to B" reversible="true">
+        <listOfReactants>
+          <speciesReference species="A" stoichiometry="1" constant="true"/>
+        </listOfReactants>
+        <listOfProducts>
+          <speciesReference species="B" stoichiometry="1" constant="true"/>
+        </listOfProducts>
+      </reaction>
+    </listOfReactions>
+  </model>
+</sbml>

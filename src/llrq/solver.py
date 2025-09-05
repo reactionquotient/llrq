@@ -370,3 +370,69 @@ class LLRQSolver:
             'exists': True,
             'method': 'reduced'
         }
+
+    def simulate_closed_loop(self,
+                             initial_conditions,
+                             t_span,
+                             controller,
+                             y_ref,
+                             **kwargs):
+        """
+        Integrate reduced dynamics with state feedback u_full = controller.u_full(t, y, y_ref).
+        Returns the same structure as .solve(...).
+        """
+        # Parse ICs and time
+        if isinstance(initial_conditions, dict):
+            c0 = self._parse_initial_dict(initial_conditions)
+        else:
+            c0 = np.array(initial_conditions, float)
+    
+        if isinstance(t_span, tuple):
+            t_eval = np.linspace(t_span[0], t_span[1], kwargs.get('n_points', 1000))
+        else:
+            t_eval = np.array(t_span, float)
+    
+        # Build reduced IC y0 from c0
+        Q0 = self.network.compute_reaction_quotients(c0)
+        x0 = np.log(Q0) - self._lnKeq_consistent
+        x0 = self._P @ x0
+        y0 = self._B.T @ x0
+    
+        # Reduced matrices
+        K_red = self._B.T @ self.dynamics.K @ self._B
+        A = -K_red
+    
+        # Exogenous drive projected
+        def d_red(t):
+            return self._B.T @ self.dynamics.external_drive(t)
+    
+        # RHS
+        def rhs(t, y):
+            u_full_ctrl = controller.u_full(t, y, np.array(y_ref, float))
+            return A @ y + self._B.T @ u_full_ctrl + d_red(t)
+    
+        # Integrate
+        options = {
+            'method': kwargs.get('integrator', 'RK45'),
+            'rtol': kwargs.get('rtol', 1e-6),
+            'atol': kwargs.get('atol', 1e-9),
+            'max_step': kwargs.get('max_step', np.inf)
+        }
+        from scipy.integrate import solve_ivp
+        sol = solve_ivp(rhs, [t_eval[0], t_eval[-1]], y0, t_eval=t_eval, **options)
+    
+        y_t = sol.y.T
+        x_t = (self._B @ y_t.T).T
+        Q_t = self._Keq_consistent * np.exp(x_t)
+        c_t = self._compute_concentrations_from_reduced(Q_t, c0, enforce_conservation=True)
+    
+        return {
+            'time': t_eval,
+            'concentrations': c_t,
+            'reaction_quotients': Q_t,
+            'log_deviations': x_t,
+            'initial_concentrations': c0,
+            'success': bool(sol.success),
+            'message': "Closed-loop simulation complete" if sol.success else f"Integration failed: {sol.message}",
+        }
+

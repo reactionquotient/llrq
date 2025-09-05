@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<sbml xmlns="http://www.sbml.org/sbml/level3/version2/core" level="3" version="2">
+  <model id="malformed_model" name="Malformed Model">
+    <listOfCompartments>
+      <compartment id="cell" name="Cell" spatialDimensions="3" size="1" constant="true"/>
+    </listOfCompartments>
+    <listOfSpecies>
+      <!-- Missing required attributes -->
+      <species id="A" compartment="cell"/>
+    </listOfSpecies>
+    <listOfReactions>
+      <reaction id="R1" reversible="true">
+        <listOfReactants>
+          <!-- Reference to non-existent species -->
+          <speciesReference species="NonExistent" stoichiometry="1"/>
+        </listOfReactants>
+      </reaction>
+    </listOfReactions>
+  </model>
+</sbml>
