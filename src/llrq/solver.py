@@ -8,6 +8,7 @@ import numpy as np
 from typing import Dict, List, Tuple, Optional, Callable, Union, Any
 import warnings
 from scipy.integrate import solve_ivp, odeint
+from scipy.linalg import expm
 from scipy.optimize import fsolve, root_scalar
 from .llrq_dynamics import LLRQDynamics
 from .reaction_network import ReactionNetwork
@@ -22,12 +23,25 @@ class LLRQSolver:
     
     def __init__(self, dynamics: LLRQDynamics):
         """Initialize solver with dynamics system.
-        
-        Args:
-            dynamics: LLRQDynamics instance
         """
         self.dynamics = dynamics
         self.network = dynamics.network
+
+        # --- Build reduced subspace for Im(S^T) (handles cycles) ---
+        S = self.network.S  # (n x r)
+        U, s, _ = np.linalg.svd(S.T, full_matrices=False)
+        tol = max(S.shape) * np.finfo(float).eps * (s[0] if s.size else 1.0)
+        rankS = int(np.sum(s > tol))
+        self._B = U[:, :rankS]                      # (r x rankS), orthonormal columns
+        self._P = self._B @ self._B.T               # projector onto Im(S^T)
+        self._rankS = rankS
+        # Consistent ln Keq (optional projection, warn if inconsistent)
+        lnKeq = np.log(self.dynamics.Keq)
+        lnKeq_proj = self._P @ lnKeq
+        if not np.allclose(lnKeq, lnKeq_proj, atol=1e-10):
+            warnings.warn("ln(Keq) not in Im(S^T); projecting to satisfy Wegscheider identities.")
+        self._lnKeq_consistent = lnKeq_proj
+        self._Keq_consistent = np.exp(lnKeq_proj)
     
     def solve(self, 
               initial_conditions: Union[np.ndarray, Dict[str, float]],
@@ -59,37 +73,65 @@ class LLRQSolver:
         else:
             t_eval = np.array(t_span)
         
-        # Compute initial reaction quotients and log deviations
+        # Initial log-deviation x0 = ln(Q/Keq) from concentrations
         Q0 = self.network.compute_reaction_quotients(c0)
-        x0 = self.dynamics.compute_log_deviation(Q0)
+        x0 = np.log(Q0) - self._lnKeq_consistent
+        # Keep only the physically meaningful part
+        x0 = self._P @ x0
+        y0 = self._B.T @ x0
         
         # Validate method
         valid_methods = ['analytical', 'numerical', 'auto']
         if method not in valid_methods:
             raise ValueError(f"Invalid method '{method}'. Valid methods are: {valid_methods}")
         
-        # Choose solution method
+        # Reduced operators
+        K = self.dynamics.K
+        K_red = self._B.T @ K @ self._B
+        def u_full(t): return self.dynamics.external_drive(t)
+        def u_red(t):  return self._B.T @ u_full(t)
+
         if method == 'auto':
-            method = self._choose_method()
+            # Prefer analytical if u is ~constant and K_red is well-conditioned and small
+            if self.dynamics.n_reactions > 10:
+                method = 'numerical'
+            elif not np.allclose(u_red(0.0), u_red(1.0), rtol=1e-3, atol=1e-9):
+                method = 'numerical'
+            elif np.linalg.cond(K_red) > 1e8:
+                method = 'numerical'
+            else:
+                method = 'analytical'
         
         if method == 'analytical':
             try:
-                x_t = self.dynamics.analytical_solution(x0, t_eval)
-                success = True
-                message = "Analytical solution computed successfully"
+                # Constant u: y(t) = e^{-K_red t} y0 + K_red^{-1}(I - e^{-K_red t}) u
+                u0 = u_red(0.0)
+                if not np.allclose(u0, u_red(1.0), rtol=1e-3, atol=1e-9):
+                    raise RuntimeError("External drive not constant; use numerical.")
+                y_t = np.zeros((len(t_eval), len(y0)))
+                for i, t in enumerate(t_eval - t_eval[0]):
+                    Et = expm(-K_red * t)
+                    if y0.size:
+                        try:
+                            corr = np.linalg.solve(K_red, (np.eye(K_red.shape[0]) - Et) @ u0)
+                        except np.linalg.LinAlgError:
+                            corr = np.linalg.lstsq(K_red, (np.eye(K_red.shape[0]) - Et) @ u0, rcond=None)[0]
+                        y_t[i] = Et @ y0 + corr
+                    else:
+                        y_t[i] = np.zeros(0)
+                success, message = True, "Analytical solution (reduced) computed successfully"
             except Exception as e:
                 warnings.warn(f"Analytical solution failed: {e}. Switching to numerical.")
-                x_t, success, message = self._numerical_solve(x0, t_eval, **kwargs)
+                y_t, success, message = self._numerical_solve_reduced(y0, t_eval, K_red, u_red, **kwargs)
         else:
-            x_t, success, message = self._numerical_solve(x0, t_eval, **kwargs)
+            y_t, success, message = self._numerical_solve_reduced(y0, t_eval, K_red, u_red, **kwargs)
+
+        # Map back to full x and then to Q (FIX: Q = Keq * exp(x))
+        x_t = (self._B @ y_t.T).T
+        Q_t = self._Keq_consistent * np.exp(x_t)
         
-        # Convert back to reaction quotients
-        Q_t = np.zeros_like(x_t)
-        for i in range(len(t_eval)):
-            Q_t[i] = self.dynamics.compute_reaction_quotients(x_t[i])
-        
-        # Compute concentrations (if conservation laws allow)
-        c_t = self._compute_concentrations(Q_t, c0, enforce_conservation)
+        # Compute concentrations (square system: conservation + reduced quotient constraints)
+        c_t = self._compute_concentrations_from_reduced(Q_t, c0, enforce_conservation)
         
         return {
             'time': t_eval,
@@ -143,9 +185,9 @@ class LLRQSolver:
         
         return 'analytical'
     
-    def _numerical_solve(self, x0: np.ndarray, t_eval: np.ndarray, 
+    def _numerical_solve_reduced(self, y0: np.ndarray, t_eval: np.ndarray, K_red: np.ndarray, u_red: Callable[[float], np.ndarray],
                         **kwargs) -> Tuple[np.ndarray, bool, str]:
-        """Solve using numerical integration."""
+        """Solve reduced system using numerical integration."""
         try:
             # Default solver options
             options = {
@@ -157,113 +199,63 @@ class LLRQSolver:
             
             # Define RHS function
             def rhs(t, x):
-                return self.dynamics.dynamics(t, x)
+                return -K_red @ x + u_red(t)
             
             # Solve ODE
-            sol = solve_ivp(rhs, [t_eval[0], t_eval[-1]], x0, 
+            sol = solve_ivp(rhs, [t_eval[0], t_eval[-1]], y0, 
                           t_eval=t_eval, **options)
             
             if sol.success:
-                return sol.y.T, True, "Numerical integration successful"
+                return sol.y.T, True, "Numerical integration successful (reduced)"
             else:
                 return sol.y.T, False, f"Integration failed: {sol.message}"
                 
         except Exception as e:
             # Fallback to simpler method
             try:
-                def rhs_odeint(x, t):
-                    return self.dynamics.dynamics(t, x)
-                
-                x_t = odeint(rhs_odeint, x0, t_eval, 
+                def rhs_odeint(y, t):
+                    return (-K_red @ y + u_red(t)).astype(float)
+                y_t = odeint(rhs_odeint, y0, t_eval, 
                            rtol=kwargs.get('rtol', 1e-6))
-                return x_t, True, "Numerical integration successful (odeint)"
+                return y_t, True, "Numerical integration successful (odeint, reduced)"
                 
             except Exception as e2:
-                return np.zeros((len(t_eval), len(x0))), False, f"All integration methods failed: {e2}"
+                return np.zeros((len(t_eval), len(y0))), False, f"All integration methods failed (reduced): {e2}"
     
-    def _compute_concentrations(self, Q_t: np.ndarray, c0: np.ndarray,
+    def _compute_concentrations_from_reduced(self, Q_t: np.ndarray, c0: np.ndarray,
                                enforce_conservation: bool) -> Optional[np.ndarray]:
-        """Compute species concentrations from reaction quotients.
-        
-        This is the inverse problem: given Q(t), find concentrations c(t)
-        that satisfy the conservation laws and Q = f(c).
-        """
+        """Reconstruct concentrations using conservation + reduced quotient constraints."""
         if not enforce_conservation:
-            # Cannot uniquely determine concentrations without conservation
             return None
-        
-        # Find conservation laws
-        C = self.network.find_conservation_laws()
-        conserved_quantities = self.network.compute_conserved_quantities(c0)
-        
+        C = self.network.find_conservation_laws()               # (n_c x n)
+        cons0 = self.network.compute_conserved_quantities(c0)   # (n_c,)
         if C.shape[0] == 0:
-            # No conservation laws - cannot determine concentrations
             warnings.warn("No conservation laws found, cannot compute concentrations")
             return None
-        
-        n_conserved = C.shape[0]
-        n_species = self.network.n_species
-        n_reactions = self.network.n_reactions
-        
-        if n_species - n_conserved != n_reactions:
-            warnings.warn(f"System has {n_species} species, {n_conserved} conservation laws, "
-                         f"and {n_reactions} reactions. Concentration reconstruction may be underdetermined.")
-        
-        # Solve for concentrations at each time point
-        c_t = np.zeros((len(Q_t), n_species))
-        
-        for i, Q in enumerate(Q_t):
+        S = self.network.S
+        B = self._B
+        lnKeq = self._lnKeq_consistent
+        n = self.network.n_species
+        c_t = np.zeros((len(Q_t), n))
+        c_guess = np.maximum(c0, 1e-9)
+        for i in range(len(Q_t)):
+            # y_target = B^T x, with x = ln Q - ln Keq
+            y_target = B.T @ (np.log(Q_t[i]) - lnKeq)
+            def residual(u):
+                c = np.exp(u)
+                r1 = C @ c - cons0
+                r2 = y_target - (B.T @ (S.T @ u - lnKeq))
+                return np.concatenate([r1, r2])
             try:
-                c_t[i] = self._solve_concentrations_at_time(Q, C, conserved_quantities)
+                u0 = np.log(np.maximum(c_guess, 1e-12))
+                u_sol = fsolve(residual, u0, xtol=1e-9, maxfev=2000)
+                c_sol = np.maximum(np.exp(u_sol), 1e-12)
+                c_t[i] = c_sol
+                c_guess = c_sol
             except Exception as e:
-                warnings.warn(f"Failed to compute concentrations at time point {i}: {e}")
-                c_t[i] = c0  # Fallback to initial concentrations
-        
+                warnings.warn(f"Concentration solve failed at i={i}: {e}; using previous guess.")
+                c_t[i] = c_guess
         return c_t
-    
-    def _solve_concentrations_at_time(self, Q: np.ndarray, C: np.ndarray, 
-                                    conserved_quantities: np.ndarray) -> np.ndarray:
-        """Solve for concentrations at a single time point."""
-        n_species = self.network.n_species
-        
-        def equations(c):
-            # Constraint 1: Conservation laws
-            conservation_residual = C @ c - conserved_quantities
-            
-            # Constraint 2: Reaction quotients
-            Q_computed = self.network.compute_reaction_quotients(c)
-            quotient_residual = np.log(Q_computed) - np.log(Q)
-            
-            return np.concatenate([conservation_residual, quotient_residual])
-        
-        # Initial guess (use reasonable values based on conserved quantities)
-        if len(conserved_quantities) == 1:
-            # Single conservation law - distribute equally among species
-            c_guess = np.ones(n_species) * conserved_quantities[0] / n_species
-        else:
-            # Multiple conservation laws - use average of conserved quantities
-            avg_conserved = np.mean(conserved_quantities)
-            c_guess = np.ones(n_species) * avg_conserved / n_species
-        
-        # Ensure positive values
-        c_guess = np.maximum(c_guess, 1e-6)
-        
-        # Solve nonlinear system
-        try:
-            solution = fsolve(equations, c_guess, xtol=1e-8)
-            
-            # Check if solution is physically reasonable
-            if np.any(solution < 0):
-                # Try with different initial guess - use sum of conserved quantities
-                total_conserved = np.sum(conserved_quantities)
-                c_guess = np.ones(n_species) * total_conserved / n_species
-                c_guess = np.maximum(c_guess, 1e-6)
-                solution = fsolve(equations, c_guess, xtol=1e-8)
-            
-            return np.maximum(solution, 1e-12)  # Ensure positive concentrations
-            
-        except Exception as e:
-            raise ValueError(f"Could not solve for concentrations: {e}")
     
     def solve_single_reaction(self, 
                             reaction_id: str,
@@ -297,9 +289,12 @@ class LLRQSolver:
         c0 = self._parse_initial_dict(initial_concentrations)
         Q0 = self.network.compute_single_reaction_quotient(reaction_id, c0)
         
-        # Get parameters for this reaction
+        # Only valid if rank(S) == 1 (one DOF). Otherwise reactions are coupled.
+        if self._rankS != 1:
+            raise ValueError("solve_single_reaction is only valid when rank(S)=1.")
         Keq_j = self.dynamics.Keq[j]
-        k_j = self.dynamics.K[j, j]  # Assume diagonal relaxation
+        K_red = self._B.T @ self.dynamics.K @ self._B
+        k_j = float(K_red.squeeze())  # effective scalar relaxation rate
         
         # Solve single reaction
         t_out, Q_t = self.dynamics.single_reaction_solution(
@@ -358,38 +353,20 @@ class LLRQSolver:
     def compute_steady_state(self, 
                            external_drive: Optional[np.ndarray] = None) -> Dict[str, Any]:
         """Compute steady state of the system.
-        
-        Args:
-            external_drive: Constant external drive u
-            
-        Returns:
-            Dictionary with steady state results
         """
-        if external_drive is None:
-            u = np.zeros(self.dynamics.n_reactions)
-        else:
-            u = np.array(external_drive)
-        
+        u_full = np.zeros(self.dynamics.n_reactions) if external_drive is None else np.array(external_drive)
+        u_red = self._B.T @ u_full
+        K_red = self._B.T @ self.dynamics.K @ self._B
         try:
-            # Steady state: K * x_ss = u
-            if np.abs(np.linalg.det(self.dynamics.K)) > 1e-12:
-                x_ss = np.linalg.solve(self.dynamics.K, u)
-                Q_ss = self.dynamics.compute_reaction_quotients(x_ss)
-                
-                return {
-                    'log_deviations': x_ss,
-                    'reaction_quotients': Q_ss,
-                    'external_drive': u,
-                    'exists': True
-                }
-            else:
-                return {
-                    'exists': False,
-                    'reason': 'Relaxation matrix K is singular'
-                }
-                
+            y_ss = np.linalg.solve(K_red, u_red)
         except np.linalg.LinAlgError:
-            return {
-                'exists': False,
-                'reason': 'Failed to solve for steady state'
-            }
+            y_ss = np.linalg.lstsq(K_red, u_red, rcond=None)[0]
+        x_ss = self._B @ y_ss
+        Q_ss = self._Keq_consistent * np.exp(x_ss)
+        return {
+            'log_deviations': x_ss,
+            'reaction_quotients': Q_ss,
+            'external_drive': u_full,
+            'exists': True,
+            'method': 'reduced'
+        }

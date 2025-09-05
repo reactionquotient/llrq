@@ -29,7 +29,8 @@ def create_mock_libsbml(errors=None):
             mock_error.getLine.return_value = line
             mock_error.getMessage.return_value = message
             mock_errors.append(mock_error)
-            mock_doc.getError.return_value = mock_error
+        # Set up getError to return the correct error object based on index
+        mock_doc.getError.side_effect = lambda i: mock_errors[i] if i < len(mock_errors) else None
     else:
         mock_doc.getNumErrors.return_value = 0
         
@@ -38,6 +39,71 @@ def create_mock_libsbml(errors=None):
     mock_libsbml.readSBMLFromString.return_value = mock_doc
     
     return mock_libsbml, mock_doc, mock_model
+
+
+def create_mock_species(species_id, name=None, init_conc=None, 
+                       init_amount=None, compartment="cell", boundary=False):
+    """Helper to create mock species object."""
+    species = MagicMock()
+    species.getId.return_value = species_id
+    species.getName.return_value = name or ""
+    species.getCompartment.return_value = compartment
+    species.getBoundaryCondition.return_value = boundary
+    
+    if init_conc is not None:
+        species.isSetInitialConcentration.return_value = True
+        species.getInitialConcentration.return_value = init_conc
+        species.isSetInitialAmount.return_value = False
+    elif init_amount is not None:
+        species.isSetInitialConcentration.return_value = False
+        species.isSetInitialAmount.return_value = True
+        species.getInitialAmount.return_value = init_amount
+    else:
+        species.isSetInitialConcentration.return_value = False
+        species.isSetInitialAmount.return_value = False
+        
+    return species
+
+
+def create_mock_reaction(reaction_id, reversible=True, reactants=None, products=None):
+    """Helper to create mock reaction object."""
+    reaction = MagicMock()
+    reaction.getId.return_value = reaction_id
+    reaction.getName.return_value = reaction_id
+    reaction.getReversible.return_value = reversible
+    
+    # Mock reactants
+    reactants = reactants or []
+    reaction.getNumReactants.return_value = len(reactants)
+    mock_reactants = []
+    for species_id, stoich in reactants:
+        reactant = MagicMock()
+        reactant.getSpecies.return_value = species_id
+        reactant.getStoichiometry.return_value = stoich
+        mock_reactants.append(reactant)
+    reaction.getReactant.side_effect = lambda i: mock_reactants[i]
+    
+    # Mock products
+    products = products or []
+    reaction.getNumProducts.return_value = len(products)
+    mock_products = []
+    for species_id, stoich in products:
+        product = MagicMock()
+        product.getSpecies.return_value = species_id
+        product.getStoichiometry.return_value = stoich
+        mock_products.append(product)
+    reaction.getProduct.side_effect = lambda i: mock_products[i]
+    
+    return reaction
+
+
+def create_mock_parameter(param_id, value, name=None):
+    """Helper to create mock parameter."""
+    param = MagicMock()
+    param.getId.return_value = param_id
+    param.getName.return_value = name or param_id
+    param.getValue.return_value = value
+    return param
 
 
 class TestSBMLParserImport:
@@ -133,36 +199,13 @@ class TestSBMLParserInitialization:
 class TestSpeciesExtraction:
     """Test species information extraction."""
 
-    def create_mock_species(self, species_id, name=None, init_conc=None, 
-                          init_amount=None, compartment="cell", boundary=False):
-        """Helper to create mock species object."""
-        species = MagicMock()
-        species.getId.return_value = species_id
-        species.getName.return_value = name or ""
-        species.getCompartment.return_value = compartment
-        species.getBoundaryCondition.return_value = boundary
-        
-        if init_conc is not None:
-            species.isSetInitialConcentration.return_value = True
-            species.getInitialConcentration.return_value = init_conc
-            species.isSetInitialAmount.return_value = False
-        elif init_amount is not None:
-            species.isSetInitialConcentration.return_value = False
-            species.isSetInitialAmount.return_value = True
-            species.getInitialAmount.return_value = init_amount
-        else:
-            species.isSetInitialConcentration.return_value = False
-            species.isSetInitialAmount.return_value = False
-            
-        return species
-
     def test_get_species_info_basic(self):
         """Test basic species information extraction."""
         mock_libsbml, mock_doc, mock_model = create_mock_libsbml()
         
         # Mock species
-        species_A = self.create_mock_species("A", "Adenine", init_conc=2.0)
-        species_B = self.create_mock_species("B", "Benzene", init_conc=1.5)
+        species_A = create_mock_species("A", "Adenine", init_conc=2.0)
+        species_B = create_mock_species("B", "Benzene", init_conc=1.5)
         
         mock_model.getNumSpecies.return_value = 2
         mock_model.getSpecies.side_effect = [species_A, species_B]
@@ -197,7 +240,7 @@ class TestSpeciesExtraction:
         mock_model.getCompartment.return_value = mock_compartment
         
         # Mock species with amount
-        species = self.create_mock_species("A", init_amount=4.0)
+        species = create_mock_species("A", init_amount=4.0)
         mock_model.getNumSpecies.return_value = 1
         mock_model.getSpecies.return_value = species
         
@@ -220,7 +263,7 @@ class TestSpeciesExtraction:
         mock_compartment.isSetSize.return_value = False
         mock_model.getCompartment.return_value = mock_compartment
         
-        species = self.create_mock_species("A", init_amount=3.0)
+        species = create_mock_species("A", init_amount=3.0)
         mock_model.getNumSpecies.return_value = 1
         mock_model.getSpecies.return_value = species
         
@@ -238,7 +281,7 @@ class TestSpeciesExtraction:
         """Test species with no initial concentration or amount."""
         mock_libsbml, mock_doc, mock_model = create_mock_libsbml()
         
-        species = self.create_mock_species("A")  # No initial values
+        species = create_mock_species("A")  # No initial values
         mock_model.getNumSpecies.return_value = 1
         mock_model.getSpecies.return_value = species
         
@@ -256,7 +299,7 @@ class TestSpeciesExtraction:
         """Test species with boundary conditions."""
         mock_libsbml, mock_doc, mock_model = create_mock_libsbml()
         
-        species = self.create_mock_species("A", boundary=True, init_conc=1.0)
+        species = create_mock_species("A", boundary=True, init_conc=1.0)
         mock_model.getNumSpecies.return_value = 1
         mock_model.getSpecies.return_value = species
         
@@ -273,43 +316,12 @@ class TestSpeciesExtraction:
 class TestReactionExtraction:
     """Test reaction information extraction."""
 
-    def create_mock_reaction(self, reaction_id, reversible=True, reactants=None, products=None):
-        """Helper to create mock reaction object."""
-        reaction = MagicMock()
-        reaction.getId.return_value = reaction_id
-        reaction.getName.return_value = reaction_id
-        reaction.getReversible.return_value = reversible
-        
-        # Mock reactants
-        reactants = reactants or []
-        reaction.getNumReactants.return_value = len(reactants)
-        mock_reactants = []
-        for species_id, stoich in reactants:
-            reactant = MagicMock()
-            reactant.getSpecies.return_value = species_id
-            reactant.getStoichiometry.return_value = stoich
-            mock_reactants.append(reactant)
-        reaction.getReactant.side_effect = lambda i: mock_reactants[i]
-        
-        # Mock products
-        products = products or []
-        reaction.getNumProducts.return_value = len(products)
-        mock_products = []
-        for species_id, stoich in products:
-            product = MagicMock()
-            product.getSpecies.return_value = species_id
-            product.getStoichiometry.return_value = stoich
-            mock_products.append(product)
-        reaction.getProduct.side_effect = lambda i: mock_products[i]
-        
-        return reaction
-
     def test_get_reaction_info_basic(self):
         """Test basic reaction information extraction."""
         mock_libsbml, mock_doc, mock_model = create_mock_libsbml()
         
         # A + B -> C
-        reaction = self.create_mock_reaction(
+        reaction = create_mock_reaction(
             "R1", 
             reversible=True,
             reactants=[("A", 1.0), ("B", 1.0)],
@@ -338,19 +350,19 @@ class TestReactionExtraction:
         mock_libsbml, mock_doc, mock_model = create_mock_libsbml()
         
         # Set up species
-        species_A = self.create_mock_species("A")
-        species_B = self.create_mock_species("B") 
-        species_C = self.create_mock_species("C")
+        species_A = create_mock_species("A")
+        species_B = create_mock_species("B") 
+        species_C = create_mock_species("C")
         mock_model.getNumSpecies.return_value = 3
         mock_model.getSpecies.side_effect = [species_A, species_B, species_C]
         
         # Set up reactions: A + B -> C, C -> A + B
-        reaction1 = self.create_mock_reaction(
+        reaction1 = create_mock_reaction(
             "R1",
             reactants=[("A", 1.0), ("B", 1.0)],
             products=[("C", 1.0)]
         )
-        reaction2 = self.create_mock_reaction(
+        reaction2 = create_mock_reaction(
             "R2", 
             reactants=[("C", 1.0)],
             products=[("A", 1.0), ("B", 1.0)]
@@ -393,21 +405,13 @@ class TestReactionExtraction:
 class TestParameterExtraction:
     """Test parameter extraction."""
 
-    def create_mock_parameter(self, param_id, value, name=None):
-        """Helper to create mock parameter."""
-        param = MagicMock()
-        param.getId.return_value = param_id
-        param.getName.return_value = name or param_id
-        param.getValue.return_value = value
-        return param
-
     def test_get_parameter_info(self):
         """Test parameter information extraction."""
         mock_libsbml, mock_doc, mock_model = create_mock_libsbml()
         
         # Mock parameters
-        param1 = self.create_mock_parameter("k1", 2.5, "Forward rate")
-        param2 = self.create_mock_parameter("k2", 1.0, "Backward rate")
+        param1 = create_mock_parameter("k1", 2.5, "Forward rate")
+        param2 = create_mock_parameter("k2", 1.0, "Backward rate")
         
         mock_model.getNumParameters.return_value = 2
         mock_model.getParameter.side_effect = [param1, param2]
@@ -437,13 +441,13 @@ class TestNetworkDataExtraction:
         
         # Mock complete model setup
         # Species: A, B
-        species_A = self.create_mock_species("A", "Species A", init_conc=2.0)
-        species_B = self.create_mock_species("B", "Species B", init_conc=1.0)
+        species_A = create_mock_species("A", "Species A", init_conc=2.0)
+        species_B = create_mock_species("B", "Species B", init_conc=1.0)
         mock_model.getNumSpecies.return_value = 2
         mock_model.getSpecies.side_effect = [species_A, species_B]
         
         # Reaction: A <-> B
-        reaction = self.create_mock_reaction(
+        reaction = create_mock_reaction(
             "R1",
             reversible=True, 
             reactants=[("A", 1.0)],
@@ -453,7 +457,7 @@ class TestNetworkDataExtraction:
         mock_model.getReaction.return_value = reaction
         
         # Parameters
-        param = self.create_mock_parameter("k1", 1.5)
+        param = create_mock_parameter("k1", 1.5)
         mock_model.getNumParameters.return_value = 1
         mock_model.getParameter.return_value = param
         
@@ -493,9 +497,6 @@ class TestErrorHandling:
         errors = [(1, "Malformed XML"), (5, "Invalid element")]
         mock_libsbml, mock_doc, mock_model = create_mock_libsbml(errors)
         
-        # Set up error handling
-        mock_doc.getError.side_effect = lambda i: errors[i] if i < len(errors) else None
-        
         with patch.dict('sys.modules', {'libsbml': mock_libsbml}):
             with patch('llrq.sbml_parser.LIBSBML_AVAILABLE', True):
                 from llrq.sbml_parser import SBMLParser, SBMLParseError
@@ -534,12 +535,12 @@ class TestIntegrationWithReactionNetwork:
         mock_libsbml, mock_doc, mock_model = create_mock_libsbml()
         
         # Set up minimal working model
-        species_A = self.create_mock_species("A", init_conc=1.0)
-        species_B = self.create_mock_species("B", init_conc=0.5)
+        species_A = create_mock_species("A", init_conc=1.0)
+        species_B = create_mock_species("B", init_conc=0.5)
         mock_model.getNumSpecies.return_value = 2
         mock_model.getSpecies.side_effect = [species_A, species_B]
         
-        reaction = self.create_mock_reaction(
+        reaction = create_mock_reaction(
             "R1",
             reactants=[("A", 1.0)],
             products=[("B", 1.0)]
