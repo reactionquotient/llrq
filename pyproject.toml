@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llrq"
+version = "0.0.1"
+description = "Log-Linear Reaction Quotient Dynamics: Tractable framework for chemical reaction networks"
+readme = "README.md"
+license = {file = "LICENSE"}
+authors = [
+    {name = "Steven Diamond", email = "steven@gridmatic.com"},
+]
+keywords = ["reaction networks", "systems biology", "SBML", "chemical kinetics", "reaction quotient"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Topic :: Scientific/Engineering :: Mathematics",
+]
+requires-python = ">=3.8"
+dependencies = [
+    "numpy>=1.20.0",
+    "scipy>=1.7.0", 
+    "matplotlib>=3.3.0",
+    "python-libsbml>=5.19.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/llrq"
+Repository = "https://github.com/yourusername/llrq"
+Issues = "https://github.com/yourusername/llrq/issues"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
