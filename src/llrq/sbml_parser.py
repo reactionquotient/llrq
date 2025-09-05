@@ -43,12 +43,17 @@ class SBMLParser:
                 "Install with: pip install python-libsbml"
             )
         
-        # Try to read as file first, then as string
-        try:
-            self.document = libsbml.readSBML(sbml_file)
-        except:
-            # If file reading fails, try as string
+        # Check if input looks like SBML content (starts with <?xml) or is a file path
+        if sbml_file.strip().startswith('<?xml'):
+            # Input is SBML string content
             self.document = libsbml.readSBMLFromString(sbml_file)
+        else:
+            # Input is a file path
+            try:
+                self.document = libsbml.readSBML(sbml_file)
+            except:
+                # If file reading fails, try as string
+                self.document = libsbml.readSBMLFromString(sbml_file)
         
         if self.document.getNumErrors() > 0:
             errors = []
