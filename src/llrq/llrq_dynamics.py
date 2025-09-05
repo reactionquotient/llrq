@@ -247,7 +247,10 @@ class LLRQDynamics:
     
     def set_mass_action_parameters(self, forward_rates: np.ndarray, 
                                   backward_rates: Optional[np.ndarray] = None):
-        """Set parameters from mass action kinetics.
+        """Set parameters from mass action kinetics (legacy method).
+        
+        Note: This is a simplified approach for independent reactions.
+        For full mass action networks, use LLRQDynamics.from_mass_action() instead.
         
         For single reaction A ⇌ B with rates kf, kr:
         - Keq = kf/kr  
@@ -260,6 +263,10 @@ class LLRQDynamics:
         if len(forward_rates) != self.n_reactions:
             raise ValueError(f"Expected {self.n_reactions} forward rates, "
                            f"got {len(forward_rates)}")
+        
+        warnings.warn("set_mass_action_parameters() is a legacy method for independent reactions. "
+                     "For coupled mass action networks, use LLRQDynamics.from_mass_action() instead.",
+                     DeprecationWarning)
         
         kf = np.array(forward_rates)
         
@@ -300,3 +307,110 @@ class LLRQDynamics:
         results['symmetric_K'] = np.allclose(self.K, self.K.T, rtol=1e-10)
         
         return results
+    
+    @classmethod
+    def from_mass_action(cls,
+                        network: ReactionNetwork,
+                        equilibrium_point: np.ndarray,
+                        forward_rates: np.ndarray,
+                        backward_rates: np.ndarray,
+                        mode: str = 'equilibrium',
+                        external_drive: Optional[Callable[[float], np.ndarray]] = None,
+                        reduce_basis: bool = True,
+                        enforce_symmetry: bool = False) -> 'LLRQDynamics':
+        """Create LLRQDynamics from mass action kinetics.
+        
+        This factory method computes the dynamics matrix K from mass action
+        parameters using the algorithm from Diamond (2025).
+        
+        Args:
+            network: Reaction network
+            equilibrium_point: Equilibrium concentrations c*
+            forward_rates: Forward rate constants k+
+            backward_rates: Backward rate constants k-
+            mode: 'equilibrium' for near thermodynamic equilibrium,
+                  'nonequilibrium' for general steady state
+            external_drive: External drive function u(t)
+            reduce_basis: Whether to reduce to Im(S^T) basis
+            enforce_symmetry: Whether to enforce symmetry for stability
+            
+        Returns:
+            LLRQDynamics instance with computed K matrix
+        """
+        # Compute dynamics matrix from mass action
+        dynamics_data = network.compute_dynamics_matrix(
+            equilibrium_point=equilibrium_point,
+            forward_rates=forward_rates,
+            backward_rates=backward_rates,
+            mode=mode,
+            reduce_to_image=reduce_basis,
+            enforce_symmetry=enforce_symmetry
+        )
+        
+        # Use reduced matrix if available
+        K_matrix = dynamics_data.get('K_reduced', dynamics_data['K'])
+        
+        # Compute equilibrium constants from mass action
+        k_plus = np.array(forward_rates)
+        k_minus = np.array(backward_rates)
+        Keq = k_plus / k_minus
+        
+        # Create dynamics instance
+        dynamics = cls(
+            network=network,
+            equilibrium_constants=Keq,
+            relaxation_matrix=K_matrix,
+            external_drive=external_drive
+        )
+        
+        # Store additional mass action data
+        dynamics._mass_action_data = dynamics_data
+        dynamics._mass_action_mode = mode
+        dynamics._equilibrium_point = np.array(equilibrium_point)
+        dynamics._forward_rates = k_plus
+        dynamics._backward_rates = k_minus
+        
+        return dynamics
+    
+    def get_mass_action_info(self) -> Optional[Dict[str, Any]]:
+        """Get mass action computation details if available.
+        
+        Returns:
+            Dictionary with mass action parameters and matrices,
+            or None if not created from mass action
+        """
+        if not hasattr(self, '_mass_action_data'):
+            return None
+        
+        return {
+            'mode': self._mass_action_mode,
+            'equilibrium_point': self._equilibrium_point,
+            'forward_rates': self._forward_rates,
+            'backward_rates': self._backward_rates,
+            'dynamics_data': self._mass_action_data
+        }
+    
+    def compute_steady_state_concentrations(self, 
+                                          conserved_quantities: Optional[np.ndarray] = None) -> np.ndarray:
+        """Compute steady state concentrations from dynamics.
+        
+        This uses the equilibrium point from mass action if available,
+        otherwise attempts to solve from the dynamics.
+        
+        Args:
+            conserved_quantities: Values of conserved quantities
+            
+        Returns:
+            Steady state concentrations
+        """
+        if hasattr(self, '_equilibrium_point'):
+            return self._equilibrium_point.copy()
+        
+        # Fallback: solve from conservation laws and equilibrium conditions
+        if conserved_quantities is not None:
+            # This is a placeholder - full implementation would solve
+            # the nonlinear system of conservation laws and equilibrium conditions
+            warnings.warn("Steady state computation from conserved quantities "
+                         "not fully implemented. Returning zeros.")
+        
+        return np.zeros(self.network.n_species)

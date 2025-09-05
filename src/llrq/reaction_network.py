@@ -7,6 +7,7 @@ reaction networks and computes reaction quotients.
 import numpy as np
 from typing import Dict, List, Tuple, Optional, Any, Union
 import warnings
+from scipy.linalg import pinv
 
 
 class ReactionNetwork:
@@ -277,6 +278,205 @@ class ReactionNetwork:
         
         return "\n".join(lines)
     
+    def compute_dynamics_matrix(self,
+                               equilibrium_point: np.ndarray,
+                               forward_rates: np.ndarray,
+                               backward_rates: np.ndarray,
+                               mode: str = 'equilibrium',
+                               reduce_to_image: bool = True,
+                               enforce_symmetry: bool = False) -> Dict[str, Any]:
+        """Compute dynamics matrix K from mass action network.
+        
+        Implements the algorithm from Diamond (2025) for computing the
+        dynamics matrix K from mass action kinetics.
+        
+        Args:
+            equilibrium_point: Equilibrium concentrations c*
+            forward_rates: Forward rate constants k+
+            backward_rates: Backward rate constants k-
+            mode: 'equilibrium' for near thermodynamic equilibrium,
+                  'nonequilibrium' for general steady state
+            reduce_to_image: Whether to reduce to Im(S^T) basis
+            enforce_symmetry: Whether to symmetrize K (for stability)
+            
+        Returns:
+            Dictionary containing:
+            - 'K': Dynamics matrix
+            - 'K_reduced': Reduced matrix (if reduce_to_image=True)
+            - 'basis': Basis matrix B for Im(S^T) (if reduce_to_image=True)
+            - 'phi': Flux coefficients (equilibrium mode)
+            - 'eigenanalysis': Eigenvalues and eigenvectors
+        """
+        if len(equilibrium_point) != self.n_species:
+            raise ValueError(f"Expected {self.n_species} equilibrium concentrations, "
+                           f"got {len(equilibrium_point)}")
+        if len(forward_rates) != self.n_reactions:
+            raise ValueError(f"Expected {self.n_reactions} forward rates, "
+                           f"got {len(forward_rates)}")
+        if len(backward_rates) != self.n_reactions:
+            raise ValueError(f"Expected {self.n_reactions} backward rates, "
+                           f"got {len(backward_rates)}")
+        
+        c_star = np.array(equilibrium_point)
+        k_plus = np.array(forward_rates)
+        k_minus = np.array(backward_rates)
+        
+        # Form D* = Diag(c*)
+        D_star = np.diag(c_star)
+        D_star_inv = np.diag(1.0 / np.maximum(c_star, 1e-12))
+        
+        if mode == 'equilibrium':
+            K = self._compute_equilibrium_dynamics_matrix(
+                c_star, k_plus, k_minus, D_star_inv)
+            phi = self._compute_flux_coefficients(c_star, k_plus, k_minus)
+            result = {'K': K, 'phi': phi}
+        elif mode == 'nonequilibrium':
+            K = self._compute_nonequilibrium_dynamics_matrix(
+                c_star, k_plus, k_minus, D_star, D_star_inv)
+            result = {'K': K}
+        else:
+            raise ValueError(f"Unknown mode: {mode}. Use 'equilibrium' or 'nonequilibrium'.")
+        
+        # Optional basis reduction
+        if reduce_to_image:
+            K_reduced, basis = self._reduce_to_image_space(K)
+            result['K_reduced'] = K_reduced
+            result['basis'] = basis
+        
+        # Optional symmetry enforcement
+        if enforce_symmetry:
+            if 'K_reduced' in result:
+                result['K_reduced'] = self._enforce_symmetry(result['K_reduced'])
+            else:
+                result['K'] = self._enforce_symmetry(result['K'])
+        
+        # Eigenanalysis
+        K_analysis = result.get('K_reduced', result['K'])
+        eigenvals, eigenvecs = np.linalg.eig(K_analysis)
+        result['eigenanalysis'] = {
+            'eigenvalues': eigenvals,
+            'eigenvectors': eigenvecs,
+            'is_stable': np.all(eigenvals.real >= -1e-12)
+        }
+        
+        return result
+    
+    def _compute_flux_coefficients(self, c_star: np.ndarray, 
+                                 k_plus: np.ndarray, k_minus: np.ndarray) -> np.ndarray:
+        """Compute flux coefficients φ_j = k_j^+ (c*)^(ν_j^reac) = k_j^- (c*)^(ν_j^prod)."""
+        phi = np.zeros(self.n_reactions)
+        
+        for j in range(self.n_reactions):
+            # Get reactant and product stoichiometries
+            nu_reac = np.maximum(-self.S[:, j], 0)  # Reactant coefficients (positive)
+            nu_prod = np.maximum(self.S[:, j], 0)   # Product coefficients (positive)
+            
+            # Compute φ_j = k_j^+ * ∏(c_i*)^(ν_ij^reac)
+            phi_forward = k_plus[j] * np.prod(c_star ** nu_reac)
+            
+            # Should equal k_j^- * ∏(c_i*)^(ν_ij^prod)
+            phi_backward = k_minus[j] * np.prod(c_star ** nu_prod)
+            
+            # Use average for robustness
+            phi[j] = 0.5 * (phi_forward + phi_backward)
+        
+        return phi
+    
+    def _compute_equilibrium_dynamics_matrix(self, c_star: np.ndarray,
+                                           k_plus: np.ndarray, k_minus: np.ndarray,
+                                           D_star_inv: np.ndarray) -> np.ndarray:
+        """Compute K = S^T D*^(-1) S Φ for equilibrium case."""
+        phi = self._compute_flux_coefficients(c_star, k_plus, k_minus)
+        Phi = np.diag(phi)
+        
+        # K = S^T D*^(-1) S Φ
+        K = self.S.T @ D_star_inv @ self.S @ Phi
+        
+        return K
+    
+    def _compute_nonequilibrium_dynamics_matrix(self, c_star: np.ndarray,
+                                              k_plus: np.ndarray, k_minus: np.ndarray,
+                                              D_star: np.ndarray, D_star_inv: np.ndarray) -> np.ndarray:
+        """Compute K = -S^T D*^(-1) S J_u R for nonequilibrium case."""
+        # Compute Jacobian J_u = ∂v/∂u at c*
+        J_u = self._compute_flux_jacobian(c_star, k_plus, k_minus)
+        
+        # Compute R = D* S (S^T D* S)^(-1)
+        STS_D = self.S.T @ D_star @ self.S
+        try:
+            STS_D_inv = np.linalg.inv(STS_D)
+        except np.linalg.LinAlgError:
+            # Use pseudoinverse if singular
+            STS_D_inv = pinv(STS_D)
+            warnings.warn("S^T D* S is singular, using pseudoinverse")
+        
+        R = D_star @ self.S @ STS_D_inv
+        
+        # K = -S^T D*^(-1) S J_u R
+        K = -self.S.T @ D_star_inv @ self.S @ J_u @ R
+        
+        return K
+    
+    def _compute_flux_jacobian(self, c_star: np.ndarray,
+                             k_plus: np.ndarray, k_minus: np.ndarray) -> np.ndarray:
+        """Compute Jacobian J_u = ∂v/∂u of reaction fluxes."""
+        n_species = len(c_star)
+        J_u = np.zeros((self.n_reactions, n_species))
+        
+        for j in range(self.n_reactions):
+            for i in range(n_species):
+                # ∂v_j/∂u_i where u_i = ln(c_i), v_j is net flux of reaction j
+                
+                # Reactant contribution: -ν_ij^reac * k_j^+ * c_i * ∏(c_k)^(ν_kj^reac)
+                nu_reac_i = max(-self.S[i, j], 0)
+                if nu_reac_i > 0:
+                    nu_reac = np.maximum(-self.S[:, j], 0)
+                    forward_flux = k_plus[j] * np.prod(c_star ** nu_reac)
+                    J_u[j, i] -= nu_reac_i * forward_flux
+                
+                # Product contribution: +ν_ij^prod * k_j^- * c_i * ∏(c_k)^(ν_kj^prod)
+                nu_prod_i = max(self.S[i, j], 0)
+                if nu_prod_i > 0:
+                    nu_prod = np.maximum(self.S[:, j], 0)
+                    backward_flux = k_minus[j] * np.prod(c_star ** nu_prod)
+                    J_u[j, i] += nu_prod_i * backward_flux
+        
+        return J_u
+    
+    def _reduce_to_image_space(self, K: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """Reduce matrix K to Im(S^T) basis."""
+        # Find orthonormal basis for Im(S^T)
+        U, s, Vt = np.linalg.svd(self.S.T, full_matrices=False)
+        rank = np.sum(s > 1e-12)
+        
+        if rank == 0:
+            warnings.warn("S^T has zero rank, returning original matrix")
+            return K, np.eye(K.shape[0])
+        
+        # Basis matrix B (columns are basis vectors)
+        B = U[:, :rank]
+        
+        # Reduced matrix K_red = B^T K B
+        K_reduced = B.T @ K @ B
+        
+        return K_reduced, B
+    
+    def _enforce_symmetry(self, K: np.ndarray) -> np.ndarray:
+        """Enforce symmetry and positive stability."""
+        # Symmetrize
+        K_sym = 0.5 * (K + K.T)
+        
+        # Ensure positive definite by shifting negative eigenvalues
+        eigenvals, eigenvecs = np.linalg.eigh(K_sym)
+        min_eigenval = np.min(eigenvals)
+        
+        if min_eigenval < 1e-12:
+            shift = 1e-10 - min_eigenval
+            eigenvals += shift
+            K_sym = eigenvecs @ np.diag(eigenvals) @ eigenvecs.T
+        
+        return K_sym
+
     @classmethod
     def from_sbml_data(cls, sbml_data: Dict[str, Any]) -> 'ReactionNetwork':
         """Create ReactionNetwork from SBML parser data.
