@@ -59,8 +59,13 @@ class TestBasicWorkflows:
         final_Q = result['reaction_quotients'][-1, 0]
         expected_Keq = k_plus[0] / k_minus[0]
         
-        # Check that we're approaching equilibrium
-        assert abs(final_Q - expected_Keq) < abs(result['reaction_quotients'][0, 0] - expected_Keq)
+        # Check that we're at or approaching equilibrium
+        initial_Q = result['reaction_quotients'][0, 0]
+        initial_deviation = abs(initial_Q - expected_Keq)
+        final_deviation = abs(final_Q - expected_Keq)
+        
+        # Either we started at equilibrium, or we approached it
+        assert final_deviation <= initial_deviation
         
         # Mass should be conserved
         total_mass = result['concentrations'].sum(axis=1)

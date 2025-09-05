@@ -240,13 +240,20 @@ class TestStoichiometry:
 class TestConservationLaws:
     """Test conservation law detection and computation."""
 
-    def test_no_conservation_laws(self):
-        """Test network with no conservation laws."""
-        # A → B (irreversible, no conservation)
+    def test_conservation_law_simple(self):
+        """Test network with simple conservation law."""
+        # A → B has conservation law A + B = constant
         network = ReactionNetwork(['A', 'B'], ['R1'], np.array([[-1], [1]]))
         
         C = network.find_conservation_laws()
-        assert C.shape[0] == 0  # No conservation laws
+        assert C.shape[0] == 1  # One conservation law
+        
+        # Check that it's the total mass conservation [1,1] (normalized)
+        expected = np.array([1, 1]) / np.linalg.norm([1, 1])
+        assert np.allclose(np.abs(C[0]), expected, atol=1e-10)
+        
+        # Verify it's actually a conservation law: C @ S = 0
+        assert np.allclose(C @ network.S, 0, atol=1e-10)
 
     def test_single_conservation_law(self):
         """Test network with one conservation law."""
@@ -257,10 +264,12 @@ class TestConservationLaws:
         C = network.find_conservation_laws()
         assert C.shape[0] == 1  # One conservation law
         
-        # Check that [1, 1, 1] is in null space (total mass conservation)
-        total_mass = np.array([1, 1, 1])
-        result = C @ total_mass
-        assert np.allclose(result, 0, atol=1e-10)
+        # Check that it's the total mass conservation [1,1,1] (normalized)
+        expected = np.array([1, 1, 1]) / np.linalg.norm([1, 1, 1])
+        assert np.allclose(np.abs(C[0]), expected, atol=1e-10)
+        
+        # Verify it's actually a conservation law: C @ S = 0
+        assert np.allclose(C @ network.S, 0, atol=1e-10)
 
     def test_multiple_conservation_laws(self):
         """Test network with multiple conservation laws."""
@@ -279,20 +288,25 @@ class TestConservationLaws:
         concentrations = np.array([2.0, 3.0])
         conserved = network.compute_conserved_quantities(concentrations)
         
-        if conserved.size > 0:
-            # Total should be conserved
-            total = concentrations.sum()
-            assert np.isclose(conserved[0], total, rtol=1e-10)
+        assert conserved.size == 1  # Should have one conserved quantity
+        # Since conservation matrix is normalized [1,1]/sqrt(2), 
+        # conserved quantity is (A + B) / sqrt(2)
+        expected = (2.0 + 3.0) / np.sqrt(2)
+        assert np.isclose(conserved[0], expected, rtol=1e-10)
 
-    def test_no_conserved_quantities(self):
-        """Test when no conserved quantities exist."""
-        # A → B (no conservation)
+    def test_conserved_quantities_simple(self):
+        """Test computation of conserved quantities."""
+        # A → B has conservation law A + B = constant
         network = ReactionNetwork(['A', 'B'], ['R1'], np.array([[-1], [1]]))
         
         concentrations = np.array([2.0, 3.0])
         conserved = network.compute_conserved_quantities(concentrations)
         
-        assert conserved.size == 0
+        assert conserved.size == 1
+        # The conserved quantity should be approximately A + B
+        # Since C is normalized [1,1]/sqrt(2), the conserved quantity is (A+B)/sqrt(2)
+        expected = (2.0 + 3.0) / np.sqrt(2)
+        assert np.isclose(conserved[0], expected, rtol=1e-10)
 
 
 class TestNetworkAnalysis:

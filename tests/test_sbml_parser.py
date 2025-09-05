@@ -15,6 +15,31 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 
+def create_mock_libsbml(errors=None):
+    """Helper to create mock libsbml module."""
+    mock_libsbml = MagicMock()
+    mock_doc = MagicMock()
+    mock_model = MagicMock()
+    
+    if errors:
+        mock_doc.getNumErrors.return_value = len(errors)
+        mock_errors = []
+        for i, (line, message) in enumerate(errors):
+            mock_error = MagicMock()
+            mock_error.getLine.return_value = line
+            mock_error.getMessage.return_value = message
+            mock_errors.append(mock_error)
+            mock_doc.getError.return_value = mock_error
+    else:
+        mock_doc.getNumErrors.return_value = 0
+        
+    mock_doc.getModel.return_value = mock_model
+    mock_libsbml.readSBML.return_value = mock_doc
+    mock_libsbml.readSBMLFromString.return_value = mock_doc
+    
+    return mock_libsbml, mock_doc, mock_model
+
+
 class TestSBMLParserImport:
     """Test SBML parser import and initialization."""
 
@@ -49,33 +74,9 @@ class TestSBMLParserImport:
 class TestSBMLParserInitialization:
     """Test SBMLParser initialization with different inputs."""
 
-    def create_mock_libsbml(self, errors=None):
-        """Helper to create mock libsbml module."""
-        mock_libsbml = MagicMock()
-        mock_doc = MagicMock()
-        mock_model = MagicMock()
-        
-        if errors:
-            mock_doc.getNumErrors.return_value = len(errors)
-            mock_errors = []
-            for i, (line, message) in enumerate(errors):
-                mock_error = MagicMock()
-                mock_error.getLine.return_value = line
-                mock_error.getMessage.return_value = message
-                mock_errors.append(mock_error)
-                mock_doc.getError.return_value = mock_error
-        else:
-            mock_doc.getNumErrors.return_value = 0
-            
-        mock_doc.getModel.return_value = mock_model
-        mock_libsbml.readSBML.return_value = mock_doc
-        mock_libsbml.readSBMLFromString.return_value = mock_doc
-        
-        return mock_libsbml, mock_doc, mock_model
-
     def test_initialization_from_file(self):
         """Test initialization from SBML file."""
-        mock_libsbml, mock_doc, mock_model = self.create_mock_libsbml()
+        mock_libsbml, mock_doc, mock_model = create_mock_libsbml()
         
         with patch.dict('sys.modules', {'libsbml': mock_libsbml}):
             with patch('llrq.sbml_parser.LIBSBML_AVAILABLE', True):
@@ -89,7 +90,7 @@ class TestSBMLParserInitialization:
 
     def test_initialization_from_string(self):
         """Test initialization from SBML string."""
-        mock_libsbml, mock_doc, mock_model = self.create_mock_libsbml()
+        mock_libsbml, mock_doc, mock_model = create_mock_libsbml()
         
         # Make readSBML fail to simulate string fallback
         mock_libsbml.readSBML.side_effect = Exception("File not found")
@@ -107,7 +108,7 @@ class TestSBMLParserInitialization:
     def test_initialization_with_parsing_errors(self):
         """Test initialization when SBML has parsing errors."""
         errors = [(10, "Invalid element"), (15, "Missing attribute")]
-        mock_libsbml, mock_doc, mock_model = self.create_mock_libsbml(errors)
+        mock_libsbml, mock_doc, mock_model = create_mock_libsbml(errors)
         
         with patch.dict('sys.modules', {'libsbml': mock_libsbml}):
             with patch('llrq.sbml_parser.LIBSBML_AVAILABLE', True):
@@ -118,7 +119,7 @@ class TestSBMLParserInitialization:
 
     def test_initialization_no_model(self):
         """Test initialization when SBML has no model."""
-        mock_libsbml, mock_doc, mock_model = self.create_mock_libsbml()
+        mock_libsbml, mock_doc, mock_model = create_mock_libsbml()
         mock_doc.getModel.return_value = None  # No model
         
         with patch.dict('sys.modules', {'libsbml': mock_libsbml}):
@@ -157,7 +158,7 @@ class TestSpeciesExtraction:
 
     def test_get_species_info_basic(self):
         """Test basic species information extraction."""
-        mock_libsbml, mock_doc, mock_model = self.create_mock_libsbml()
+        mock_libsbml, mock_doc, mock_model = create_mock_libsbml()
         
         # Mock species
         species_A = self.create_mock_species("A", "Adenine", init_conc=2.0)
@@ -187,7 +188,7 @@ class TestSpeciesExtraction:
 
     def test_get_species_info_with_amounts(self):
         """Test species with initial amounts instead of concentrations."""
-        mock_libsbml, mock_doc, mock_model = self.create_mock_libsbml()
+        mock_libsbml, mock_doc, mock_model = create_mock_libsbml()
         
         # Mock compartment
         mock_compartment = MagicMock()
@@ -212,7 +213,7 @@ class TestSpeciesExtraction:
 
     def test_get_species_info_amount_no_compartment_size(self):
         """Test species with amount but no compartment size."""
-        mock_libsbml, mock_doc, mock_model = self.create_mock_libsbml()
+        mock_libsbml, mock_doc, mock_model = create_mock_libsbml()
         
         # Mock compartment without size
         mock_compartment = MagicMock()
@@ -235,7 +236,7 @@ class TestSpeciesExtraction:
 
     def test_get_species_info_no_initial_value(self):
         """Test species with no initial concentration or amount."""
-        mock_libsbml, mock_doc, mock_model = self.create_mock_libsbml()
+        mock_libsbml, mock_doc, mock_model = create_mock_libsbml()
         
         species = self.create_mock_species("A")  # No initial values
         mock_model.getNumSpecies.return_value = 1
@@ -253,7 +254,7 @@ class TestSpeciesExtraction:
 
     def test_get_species_info_boundary_conditions(self):
         """Test species with boundary conditions."""
-        mock_libsbml, mock_doc, mock_model = self.create_mock_libsbml()
+        mock_libsbml, mock_doc, mock_model = create_mock_libsbml()
         
         species = self.create_mock_species("A", boundary=True, init_conc=1.0)
         mock_model.getNumSpecies.return_value = 1
@@ -305,7 +306,7 @@ class TestReactionExtraction:
 
     def test_get_reaction_info_basic(self):
         """Test basic reaction information extraction."""
-        mock_libsbml, mock_doc, mock_model = self.create_mock_libsbml()
+        mock_libsbml, mock_doc, mock_model = create_mock_libsbml()
         
         # A + B -> C
         reaction = self.create_mock_reaction(
@@ -334,7 +335,7 @@ class TestReactionExtraction:
 
     def test_extract_stoichiometric_matrix(self):
         """Test stoichiometric matrix extraction."""
-        mock_libsbml, mock_doc, mock_model = self.create_mock_libsbml()
+        mock_libsbml, mock_doc, mock_model = create_mock_libsbml()
         
         # Set up species
         species_A = self.create_mock_species("A")
@@ -402,7 +403,7 @@ class TestParameterExtraction:
 
     def test_get_parameter_info(self):
         """Test parameter information extraction."""
-        mock_libsbml, mock_doc, mock_model = self.create_mock_libsbml()
+        mock_libsbml, mock_doc, mock_model = create_mock_libsbml()
         
         # Mock parameters
         param1 = self.create_mock_parameter("k1", 2.5, "Forward rate")
@@ -432,7 +433,7 @@ class TestNetworkDataExtraction:
 
     def test_extract_network_data_complete(self):
         """Test complete network data extraction."""
-        mock_libsbml, mock_doc, mock_model = self.create_mock_libsbml()
+        mock_libsbml, mock_doc, mock_model = create_mock_libsbml()
         
         # Mock complete model setup
         # Species: A, B
@@ -490,7 +491,7 @@ class TestErrorHandling:
     def test_malformed_sbml_handling(self):
         """Test handling of malformed SBML."""
         errors = [(1, "Malformed XML"), (5, "Invalid element")]
-        mock_libsbml, mock_doc, mock_model = self.create_mock_libsbml(errors)
+        mock_libsbml, mock_doc, mock_model = create_mock_libsbml(errors)
         
         # Set up error handling
         mock_doc.getError.side_effect = lambda i: errors[i] if i < len(errors) else None
@@ -508,7 +509,7 @@ class TestErrorHandling:
 
     def test_empty_model_handling(self):
         """Test handling of model with no species or reactions."""
-        mock_libsbml, mock_doc, mock_model = self.create_mock_libsbml()
+        mock_libsbml, mock_doc, mock_model = create_mock_libsbml()
         
         # Empty model
         mock_model.getNumSpecies.return_value = 0
@@ -530,7 +531,7 @@ class TestIntegrationWithReactionNetwork:
 
     def test_create_reaction_network_from_sbml_data(self):
         """Test creating ReactionNetwork from SBML parser data."""
-        mock_libsbml, mock_doc, mock_model = self.create_mock_libsbml()
+        mock_libsbml, mock_doc, mock_model = create_mock_libsbml()
         
         # Set up minimal working model
         species_A = self.create_mock_species("A", init_conc=1.0)

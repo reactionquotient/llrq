@@ -35,6 +35,12 @@ class ReactionNetwork:
             reaction_info: Additional reaction information from SBML
             parameters: Global parameters from SBML
         """
+        # Validate input arguments
+        if len(species_ids) == 0:
+            raise ValueError("Cannot create reaction network with empty species list")
+        if len(reaction_ids) == 0:
+            raise ValueError("Cannot create reaction network with empty reaction list")
+        
         self.species_ids = species_ids
         self.reaction_ids = reaction_ids
         self.S = np.array(stoichiometric_matrix, dtype=float)
@@ -92,9 +98,17 @@ class ReactionNetwork:
         Returns:
             Array of reaction quotients Q_j = ∏_i [X_i]^S_ij
         """
+        concentrations = np.asarray(concentrations)
+        
         if len(concentrations) != self.n_species:
             raise ValueError(f"Expected {self.n_species} concentrations, "
                            f"got {len(concentrations)}")
+        
+        # Validate for NaN and infinite values
+        if np.any(np.isnan(concentrations)):
+            raise ValueError("Concentration values cannot be NaN")
+        if np.any(np.isinf(concentrations)):
+            raise ValueError("Concentration values cannot be infinite")
         
         # Avoid log(0) by adding small epsilon
         eps = 1e-12
@@ -153,25 +167,55 @@ class ReactionNetwork:
         return reactants, products
     
     def find_conservation_laws(self, tol: float = 1e-10) -> np.ndarray:
-        """Find conservation laws (null space of stoichiometric matrix).
+        """Find conservation laws (left null space of stoichiometric matrix).
+        
+        Conservation laws are linear combinations w of species concentrations
+        that remain constant over time: w @ c(t) = constant.
+        These satisfy: w @ S = 0 (left null space of S).
         
         Args:
             tol: Tolerance for determining rank
             
         Returns:
-            Conservation matrix C where C @ concentrations = constants
+            Conservation matrix C where each row is a conservation law vector
         """
         if self._conservation_matrix is None:
-            # Find left null space of S (rows that sum to zero when multiplied by S)
-            # This is equivalent to right null space of S.T
+            # Find left null space of S using SVD
             U, s, Vt = np.linalg.svd(self.S.T, full_matrices=True)
             rank = np.sum(s > tol)
             
             if rank < self.n_species:
                 # Conservation laws exist
-                self._conservation_matrix = Vt[rank:, :]
+                # The left null space of S is the right null space of S.T
+                conservation_vectors = Vt[rank:, :]
+                
+                # Normalize and clean up small numerical errors
+                clean_vectors = []
+                for vec in conservation_vectors:
+                    # Normalize
+                    vec_normalized = vec / np.linalg.norm(vec)
+                    
+                    # Try to make it have nice integer coefficients if possible
+                    # Scale to make largest absolute component 1
+                    max_coeff = np.max(np.abs(vec_normalized))
+                    if max_coeff > tol:
+                        vec_scaled = vec_normalized / max_coeff
+                        
+                        # Check if coefficients are close to integers
+                        if np.allclose(vec_scaled, np.round(vec_scaled), atol=1e-6):
+                            vec_clean = np.round(vec_scaled)
+                            # Renormalize to unit vector
+                            vec_clean = vec_clean / np.linalg.norm(vec_clean)
+                            clean_vectors.append(vec_clean)
+                        else:
+                            clean_vectors.append(vec_normalized)
+                
+                if clean_vectors:
+                    self._conservation_matrix = np.array(clean_vectors)
+                else:
+                    self._conservation_matrix = np.zeros((0, self.n_species))
             else:
-                # No conservation laws
+                # No conservation laws (full rank)
                 self._conservation_matrix = np.zeros((0, self.n_species))
         
         return self._conservation_matrix

@@ -406,8 +406,8 @@ class LLRQDynamics:
             enforce_symmetry=enforce_symmetry
         )
         
-        # Use reduced matrix if available
-        K_matrix = dynamics_data.get('K_reduced', dynamics_data['K'])
+        # Use the full matrix to match number of reactions
+        K_matrix = dynamics_data['K']
         
         # Compute equilibrium constants from mass action
         k_plus = np.array(forward_rates)

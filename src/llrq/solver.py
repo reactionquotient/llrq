@@ -63,6 +63,11 @@ class LLRQSolver:
         Q0 = self.network.compute_reaction_quotients(c0)
         x0 = self.dynamics.compute_log_deviation(Q0)
         
+        # Validate method
+        valid_methods = ['analytical', 'numerical', 'auto']
+        if method not in valid_methods:
+            raise ValueError(f"Invalid method '{method}'. Valid methods are: {valid_methods}")
+        
         # Choose solution method
         if method == 'auto':
             method = self._choose_method()
@@ -99,6 +104,12 @@ class LLRQSolver:
     
     def _parse_initial_dict(self, init_dict: Dict[str, float]) -> np.ndarray:
         """Parse initial conditions from dictionary."""
+        # Validate that all species in dict are known
+        invalid_species = set(init_dict.keys()) - set(self.network.species_ids)
+        if invalid_species:
+            raise ValueError(f"Invalid species in initial conditions: {list(invalid_species)}. "
+                           f"Valid species are: {self.network.species_ids}")
+        
         c0 = np.zeros(self.network.n_species)
         
         for i, species_id in enumerate(self.network.species_ids):
@@ -225,9 +236,17 @@ class LLRQSolver:
             
             return np.concatenate([conservation_residual, quotient_residual])
         
-        # Initial guess (use geometric mean of bounds)
-        c_guess = np.maximum(conserved_quantities / n_species, 1e-6)
-        c_guess = np.tile(c_guess[0], n_species) if len(c_guess) == 1 else c_guess[:n_species]
+        # Initial guess (use reasonable values based on conserved quantities)
+        if len(conserved_quantities) == 1:
+            # Single conservation law - distribute equally among species
+            c_guess = np.ones(n_species) * conserved_quantities[0] / n_species
+        else:
+            # Multiple conservation laws - use average of conserved quantities
+            avg_conserved = np.mean(conserved_quantities)
+            c_guess = np.ones(n_species) * avg_conserved / n_species
+        
+        # Ensure positive values
+        c_guess = np.maximum(c_guess, 1e-6)
         
         # Solve nonlinear system
         try:
@@ -235,8 +254,10 @@ class LLRQSolver:
             
             # Check if solution is physically reasonable
             if np.any(solution < 0):
-                # Try with different initial guess
-                c_guess = np.ones(n_species) * np.sum(conserved_quantities) / n_species
+                # Try with different initial guess - use sum of conserved quantities
+                total_conserved = np.sum(conserved_quantities)
+                c_guess = np.ones(n_species) * total_conserved / n_species
+                c_guess = np.maximum(c_guess, 1e-6)
                 solution = fsolve(equations, c_guess, xtol=1e-8)
             
             return np.maximum(solution, 1e-12)  # Ensure positive concentrations

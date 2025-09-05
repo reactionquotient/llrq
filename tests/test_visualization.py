@@ -76,6 +76,22 @@ class TestLLRQVisualizerInitialization:
         assert visualizer.network == network
 
 
+def create_mock_axes():
+    """Helper to create mock matplotlib axes that support both indexing styles."""
+    class MockAxes:
+        def __init__(self):
+            self._axes = [[MagicMock(), MagicMock()], [MagicMock(), MagicMock()]]
+        
+        def __getitem__(self, key):
+            if isinstance(key, tuple):
+                i, j = key
+                return self._axes[i][j]
+            else:
+                return self._axes[key]
+    
+    return MockAxes()
+
+
 class TestPlotDynamics:
     """Test dynamics plotting functionality."""
 
@@ -111,7 +127,7 @@ class TestPlotDynamics:
         # Mock matplotlib
         with patch('llrq.visualization.plt') as mock_plt:
             mock_fig = MagicMock()
-            mock_axes = np.array([[MagicMock(), MagicMock()], [MagicMock(), MagicMock()]])
+            mock_axes = create_mock_axes()
             mock_plt.subplots.return_value = (mock_fig, mock_axes)
             
             fig = visualizer.plot_dynamics(solution)
@@ -151,7 +167,7 @@ class TestPlotDynamics:
         
         with patch('llrq.visualization.plt') as mock_plt:
             mock_fig = MagicMock()
-            mock_axes = np.array([[MagicMock(), MagicMock()], [MagicMock(), MagicMock()]])
+            mock_axes = create_mock_axes()
             mock_plt.subplots.return_value = (mock_fig, mock_axes)
             
             fig = visualizer.plot_dynamics(solution, species_to_plot=['A', 'B'])
@@ -189,7 +205,7 @@ class TestPlotDynamics:
         
         with patch('llrq.visualization.plt') as mock_plt:
             mock_fig = MagicMock()
-            mock_axes = np.array([[MagicMock(), MagicMock()], [MagicMock(), MagicMock()]])
+            mock_axes = create_mock_axes()
             mock_plt.subplots.return_value = (mock_fig, mock_axes)
             
             fig = visualizer.plot_dynamics(solution, reactions_to_plot=['forward'])
@@ -226,7 +242,7 @@ class TestPlotDynamics:
         
         with patch('llrq.visualization.plt') as mock_plt:
             mock_fig = MagicMock()
-            mock_axes = np.array([[MagicMock(), MagicMock()], [MagicMock(), MagicMock()]])
+            mock_axes = create_mock_axes()
             mock_plt.subplots.return_value = (mock_fig, mock_axes)
             
             fig = visualizer.plot_dynamics(solution, log_scale=True)
@@ -265,7 +281,7 @@ class TestPlotDynamics:
         
         with patch('llrq.visualization.plt') as mock_plt:
             mock_fig = MagicMock()
-            mock_axes = np.array([[MagicMock(), MagicMock()], [MagicMock(), MagicMock()]])
+            mock_axes = create_mock_axes()
             mock_plt.subplots.return_value = (mock_fig, mock_axes)
             
             fig = visualizer.plot_dynamics(solution)
@@ -507,7 +523,7 @@ class TestErrorHandling:
         
         with patch('llrq.visualization.plt') as mock_plt:
             mock_fig = MagicMock()
-            mock_axes = np.array([[MagicMock(), MagicMock()], [MagicMock(), MagicMock()]])
+            mock_axes = create_mock_axes()
             mock_plt.subplots.return_value = (mock_fig, mock_axes)
             
             # Should handle gracefully
@@ -548,7 +564,7 @@ class TestErrorHandling:
         
         with patch('llrq.visualization.plt') as mock_plt:
             mock_fig = MagicMock()
-            mock_axes = np.array([[MagicMock(), MagicMock()], [MagicMock(), MagicMock()]])
+            mock_axes = create_mock_axes()
             mock_plt.subplots.return_value = (mock_fig, mock_axes)
             
             # Should handle invalid species gracefully
@@ -613,7 +629,7 @@ class TestCustomPlotParameters:
         
         with patch('llrq.visualization.plt') as mock_plt:
             mock_fig = MagicMock()
-            mock_axes = np.array([[MagicMock(), MagicMock()], [MagicMock(), MagicMock()]])
+            mock_axes = create_mock_axes()
             mock_plt.subplots.return_value = (mock_fig, mock_axes)
             
             fig = visualizer.plot_dynamics(solution, figsize=(10, 6))
@@ -651,7 +667,7 @@ class TestCustomPlotParameters:
         
         with patch('llrq.visualization.plt') as mock_plt:
             mock_fig = MagicMock()
-            mock_axes = np.array([[MagicMock(), MagicMock()], [MagicMock(), MagicMock()]])
+            mock_axes = create_mock_axes()
             mock_plt.subplots.return_value = (mock_fig, mock_axes)
             
             fig = visualizer.plot_dynamics(solution, compare_mass_action=True)
