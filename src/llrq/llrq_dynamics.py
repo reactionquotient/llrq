@@ -320,22 +320,81 @@ class LLRQDynamics:
                         enforce_symmetry: bool = False) -> 'LLRQDynamics':
         """Create LLRQDynamics from mass action kinetics.
         
-        This factory method computes the dynamics matrix K from mass action
-        parameters using the algorithm from Diamond (2025).
+        This factory method implements the complete pipeline from mass action
+        kinetics to log-linear reaction quotient dynamics using the algorithm
+        from Diamond (2025).
+        
+        **Pipeline**:
+        1. Computes dynamics matrix K from mass action parameters
+        2. Derives equilibrium constants Keq = k⁺/k⁻  
+        3. Creates LLRQDynamics instance with computed parameters
+        4. Stores mass action metadata for later retrieval
+        
+        The resulting dynamics object satisfies:
+            d/dt ln Q = -K ln(Q/Keq) + u(t)
+        
+        where the matrix K captures the network's relaxation behavior and
+        coupling between reactions.
+        
+        **Typical workflow**:
+        ```python
+        # 1. Create network from stoichiometry
+        network = ReactionNetwork(species, reactions, S_matrix)
+        
+        # 2. Define mass action parameters
+        c_star = [...]  # Steady-state concentrations
+        k_plus = [...]  # Forward rate constants  
+        k_minus = [...] # Backward rate constants
+        
+        # 3. Create dynamics automatically
+        dynamics = LLRQDynamics.from_mass_action(
+            network, c_star, k_plus, k_minus, mode='equilibrium'
+        )
+        
+        # 4. Use for simulation, analysis, control design
+        eigeninfo = dynamics.compute_eigenanalysis()
+        solution = dynamics.analytical_solution(x0, t)
+        ```
         
         Args:
-            network: Reaction network
-            equilibrium_point: Equilibrium concentrations c*
-            forward_rates: Forward rate constants k+
-            backward_rates: Backward rate constants k-
-            mode: 'equilibrium' for near thermodynamic equilibrium,
-                  'nonequilibrium' for general steady state
-            external_drive: External drive function u(t)
-            reduce_basis: Whether to reduce to Im(S^T) basis
-            enforce_symmetry: Whether to enforce symmetry for stability
+            network: ReactionNetwork defining stoichiometry and species
+            equilibrium_point: Equilibrium/steady-state concentrations c* [species]
+            forward_rates: Forward rate constants k⁺ [reactions]  
+            backward_rates: Backward rate constants k⁻ [reactions]
+            mode: Algorithm mode - 'equilibrium' (near thermodynamic equilibrium)
+                  or 'nonequilibrium' (general steady state)
+            external_drive: External drive function u(t) → array[reactions]
+            reduce_basis: Whether to reduce to Im(S^T) basis (recommended)
+            enforce_symmetry: Whether to enforce detailed balance symmetry
             
         Returns:
-            LLRQDynamics instance with computed K matrix
+            LLRQDynamics instance with:
+            - K: Computed dynamics matrix (possibly reduced)
+            - Keq: Equilibrium constants from k⁺/k⁻
+            - Mass action metadata accessible via get_mass_action_info()
+            
+        Examples:
+            Enzymatic reaction E + S ⇌ ES → E + P:
+            >>> network = ReactionNetwork(
+            ...     ['E', 'S', 'ES', 'P'], 
+            ...     ['binding', 'unbinding', 'catalysis'],
+            ...     [[-1, 1, 1], [-1, 1, 0], [1, -1, -1], [0, 0, 1]]
+            ... )
+            >>> dynamics = LLRQDynamics.from_mass_action(
+            ...     network, 
+            ...     equilibrium_point=[1.0, 2.0, 0.1, 0.5],
+            ...     forward_rates=[2.0, 1.0, 5.0],
+            ...     backward_rates=[1.0, 2.0, 0.0],
+            ...     mode='equilibrium'
+            ... )
+            >>> print(f"Relaxation timescales: {1/dynamics.compute_eigenanalysis()['eigenvalues'].real}")
+            
+        See Also:
+            ReactionNetwork.compute_dynamics_matrix: Lower-level matrix computation
+            get_mass_action_info: Retrieve stored mass action parameters
+            
+        References:
+            Diamond, S. (2025). "Log-Linear Reaction Quotient Dynamics"
         """
         # Compute dynamics matrix from mass action
         dynamics_data = network.compute_dynamics_matrix(

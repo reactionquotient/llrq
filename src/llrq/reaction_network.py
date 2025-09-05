@@ -287,25 +287,64 @@ class ReactionNetwork:
                                enforce_symmetry: bool = False) -> Dict[str, Any]:
         """Compute dynamics matrix K from mass action network.
         
-        Implements the algorithm from Diamond (2025) for computing the
-        dynamics matrix K from mass action kinetics.
+        Implements the algorithm from Diamond (2025) "Log-Linear Reaction Quotient 
+        Dynamics" for computing the dynamics matrix K that governs:
+        
+            d/dt ln Q = -K ln(Q/Keq) + u(t)
+        
+        where Q are reaction quotients, Keq equilibrium constants, u(t) external drives.
+        
+        Algorithm modes:
+        
+        **Equilibrium mode** (near thermodynamic equilibrium):
+        1. Compute flux coefficients: φⱼ = kⱼ⁺ (c*)^νⱼʳᵉᵃᶜ = kⱼ⁻ (c*)^νⱼᵖʳᵒᵈ
+        2. Form Φ = Diag(φ), D* = Diag(c*)
+        3. Return K = S^T (D*)⁻¹ S Φ
+        
+        **Nonequilibrium mode** (general steady state):
+        1. Evaluate Jacobian Jᵤ = ∂v/∂u at c* (u = ln c, v = reaction rates)
+        2. Build R = D* S (S^T D* S)⁻¹
+        3. Return K = -S^T (D*)⁻¹ S Jᵤ R
+        
+        Optional enhancements:
+        - **Basis reduction**: Projects to Im(S^T) to eliminate conservation null space
+        - **Symmetry enforcement**: Ensures K is symmetric positive definite
+        
+        Physical interpretation:
+        - K captures how reaction quotient deviations relax back to equilibrium
+        - Eigenvalues of K give relaxation timescales (1/λ)
+        - Off-diagonal coupling shows how reactions influence each other
         
         Args:
-            equilibrium_point: Equilibrium concentrations c*
-            forward_rates: Forward rate constants k+
-            backward_rates: Backward rate constants k-
+            equilibrium_point: Equilibrium/steady-state concentrations c* [species]
+            forward_rates: Forward rate constants k⁺ [reactions]
+            backward_rates: Backward rate constants k⁻ [reactions]
             mode: 'equilibrium' for near thermodynamic equilibrium,
                   'nonequilibrium' for general steady state
-            reduce_to_image: Whether to reduce to Im(S^T) basis
-            enforce_symmetry: Whether to symmetrize K (for stability)
+            reduce_to_image: Whether to reduce to Im(S^T) basis (recommended)
+            enforce_symmetry: Whether to symmetrize K (for detailed balance systems)
             
         Returns:
             Dictionary containing:
-            - 'K': Dynamics matrix
-            - 'K_reduced': Reduced matrix (if reduce_to_image=True)
-            - 'basis': Basis matrix B for Im(S^T) (if reduce_to_image=True)
-            - 'phi': Flux coefficients (equilibrium mode)
-            - 'eigenanalysis': Eigenvalues and eigenvectors
+            - 'K': Full dynamics matrix [reactions × reactions]
+            - 'K_reduced': Reduced matrix [rank(S^T) × rank(S^T)] (if reduce_to_image=True)
+            - 'basis': Orthonormal basis B for Im(S^T) [reactions × rank(S^T)] (if reduce_to_image=True)
+            - 'phi': Flux coefficients [reactions] (equilibrium mode only)
+            - 'eigenanalysis': {'eigenvalues', 'eigenvectors', 'is_stable'}
+            
+        Examples:
+            Simple A ⇌ B reaction:
+            >>> network = ReactionNetwork(['A', 'B'], ['R1'], [[-1], [1]])
+            >>> result = network.compute_dynamics_matrix(
+            ...     equilibrium_point=[1.0, 2.0],
+            ...     forward_rates=[2.0],
+            ...     backward_rates=[1.0],
+            ...     mode='equilibrium'
+            ... )
+            >>> print(f"K = {result['K']}, stable = {result['eigenanalysis']['is_stable']}")
+            
+        References:
+            Diamond, S. (2025). "Log-Linear Reaction Quotient Dynamics"
         """
         if len(equilibrium_point) != self.n_species:
             raise ValueError(f"Expected {self.n_species} equilibrium concentrations, "
