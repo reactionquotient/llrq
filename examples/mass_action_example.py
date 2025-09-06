@@ -44,7 +44,7 @@ def example_enzymatic_reaction():
     # Set parameters for steady state
     c_star = np.array([1.0, 2.0, 0.1, 0.5])  # Concentrations at operating point
     k_plus = np.array([2.0, 1.0, 5.0])       # Forward rates
-    k_minus = np.array([1.0, 2.0, 0.0])      # Backward rates (R2 irreversible)
+    k_minus = np.array([1.0, 2.0, 1e-6])     # Backward rates (R2 nearly irreversible)
     
     print(f"\nOperating point concentrations: {dict(zip(species_ids, c_star))}")
     print(f"Forward rates: {dict(zip(reaction_ids, k_plus))}")
@@ -167,17 +167,78 @@ def example_metabolic_pathway():
     
     # Simulate dynamics
     print("\nSimulating dynamics...")
-    t = np.linspace(0, 10, 100)
     
-    # Initial log deviations (start away from equilibrium)
-    Q0 = network.compute_reaction_quotients(c_star * np.array([1.2, 0.8, 1.1, 0.9]))
-    x0 = dynamics.compute_log_deviation(Q0)
+    # Create solver  
+    from llrq import LLRQSolver
+    solver = LLRQSolver(dynamics)
     
-    print(f"Initial reaction quotients: {Q0}")
-    print(f"Initial log deviations: {x0}")
+    # Initial concentrations (away from equilibrium)
+    c0 = c_star * np.array([1.2, 0.8, 1.1, 0.9])
     
-    # Note: For full simulation, you would use scipy.integrate.solve_ivp
-    # with the dynamics.dynamics function
+    # Solve dynamics
+    result = solver.solve(
+        initial_conditions=c0,
+        t_span=(0.0, 10.0),
+        n_points=200,
+        method='numerical'
+    )
+    
+    print(f"Initial concentrations: {c0}")
+    print(f"Final concentrations: {result['concentrations'][-1]}")
+    print(f"Final reaction quotients: {result['reaction_quotients'][-1]}")
+    
+    # Plot results
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+    t = result['time']
+    
+    # Plot concentrations
+    ax = axes[0, 0]
+    for i, species in enumerate(species_ids):
+        ax.plot(t, result['concentrations'][:, i], label=species, linewidth=2)
+    ax.set_xlabel('Time')
+    ax.set_ylabel('Concentration')
+    ax.set_title('Species Concentrations with External Drive')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    # Plot reaction quotients vs equilibrium
+    ax = axes[0, 1]
+    for i, rxn in enumerate(reaction_ids):
+        ax.plot(t, result['reaction_quotients'][:, i], label=rxn, linewidth=2)
+        ax.axhline(y=dynamics.Keq[i], color='gray', linestyle='--', alpha=0.7)
+    ax.set_xlabel('Time')
+    ax.set_ylabel('Reaction Quotient Q')
+    ax.set_title('Reaction Quotients (dashed = equilibrium)')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    # Plot log deviations
+    ax = axes[1, 0]
+    log_devs = result['log_deviations']
+    for i, rxn in enumerate(reaction_ids):
+        ax.plot(t, log_devs[:, i], label=f'ln(Q_{i+1}/Keq_{i+1})', linewidth=2)
+    ax.axhline(y=0, color='black', linestyle='-', alpha=0.5)
+    ax.set_xlabel('Time')
+    ax.set_ylabel('ln(Q/Keq)')
+    ax.set_title('Log Deviations from Equilibrium')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    # Plot external drive
+    ax = axes[1, 1]
+    drive_vals = np.array([metabolic_drive(ti) for ti in t])
+    for i, rxn in enumerate(reaction_ids):
+        ax.plot(t, drive_vals[:, i], label=f'u_{i+1}({rxn})', linewidth=2)
+    ax.axhline(y=0, color='black', linestyle='-', alpha=0.5)
+    ax.set_xlabel('Time')
+    ax.set_ylabel('External Drive u(t)')
+    ax.set_title('External Drive Signals')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    plt.suptitle('LLRQ Dynamics: Linear Metabolic Pathway', fontsize=14)
+    plt.tight_layout()
+    plt.show()
     
     print()
 
