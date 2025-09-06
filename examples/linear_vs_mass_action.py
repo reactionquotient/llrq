@@ -28,7 +28,7 @@ class ComparisonConfig:
     # Disturbances
     impulse_time: float = 20.0
     impulse_magnitude: np.ndarray = None
-    sinus_amp: float = 0.0  # Set to zero to test pure control convergence
+    sinus_amp: float = 0.01  # Small amplitude to test disturbance consistency
     
     # Mass action parameters (if available)
     rate_constants: dict = None
@@ -299,6 +299,17 @@ def build_and_run_comparison(out_dir: str = "llrq_linear_vs_mass_action"):
         c_diff = mass_action_result['concentrations'][-1] - linear_result['C'][-1]
         print(f"  Concentration differences: {c_diff}")
         print(f"  Max absolute difference: {np.max(np.abs(c_diff)):.6f}")
+        
+        # Disturbance effect analysis
+        c_target_array = np.array([c_target, c_target, c_target])  # Target for all time points
+        linear_deviations = np.linalg.norm(linear_result['y'] - cfg.y_ref, axis=1)
+        mass_deviations = np.linalg.norm(mass_action_result['y'] - cfg.y_ref, axis=1)
+        
+        print(f"\n=== DISTURBANCE EFFECT ANALYSIS ===")
+        print(f"RMS deviation from target (linear): {np.sqrt(np.mean(linear_deviations**2)):.6f}")
+        print(f"RMS deviation from target (mass action): {np.sqrt(np.mean(mass_deviations**2)):.6f}")
+        print(f"Max deviation from target (linear): {np.max(linear_deviations):.6f}")
+        print(f"Max deviation from target (mass action): {np.max(mass_deviations):.6f}")
     
     # Create plots
     figs = {}

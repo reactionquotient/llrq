@@ -262,8 +262,12 @@ class MassActionSimulator:
             if disturbance_function is not None:
                 d_state = disturbance_function(t_start)
                 if len(d_state) > 0:
+                    # Scale disturbance by timestep to represent rate effect
+                    # This makes it consistent with linear simulation where d affects derivative
+                    dt = t_end - t_start
+                    scaled_disturbance = d_state * dt
                     # Convert reduced state disturbance to concentration changes
-                    self._apply_state_disturbance(d_state)
+                    self._apply_state_disturbance(scaled_disturbance)
             
             # Simulate one time step
             try:
