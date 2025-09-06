@@ -165,14 +165,16 @@ def build_and_run(out_dir: str = "llrq_report_cycle"):
     x0 = solver._P @ x0
     y = (B.T @ x0)
 
-    # Disturbances in reduced space (Keq step + sinusoid) - reduced magnitude
-    step = np.array([0.05, -0.03])[:rankS]  # Smaller step disturbance
+    # Disturbances in reduced space (Keq step + sinusoid) - increased magnitude
+    step = np.array([0.3, -0.2])[:rankS]  # Larger step disturbance to make it visible
     if cfg.step_vec is None:
         cfg.step_vec = step
 
     def d_red(t):
         sinus = cfg.sinus_amp * np.array([np.sin(0.8*t), 0.3*np.sin(1.1*t)])[:rankS]
-        return sinus + (t >= cfg.step_time) * cfg.step_vec
+        # Impulse disturbance: only applied for one time step at cfg.step_time
+        impulse = np.zeros(rankS)
+        return sinus + impulse
 
     # Storage
     Y = np.zeros((n, rankS))
@@ -213,6 +215,10 @@ def build_and_run(out_dir: str = "llrq_report_cycle"):
 
         # Integrate (explicit Euler)
         y = y + dt * ydot
+        
+        # Apply impulse disturbance at specific time (kick to the state)
+        if abs(t - cfg.step_time) < dt/2:  # Apply once when t ≈ step_time
+            y = y + cfg.step_vec  # Direct kick to the state
 
         # Log results
         Y[i] = y
@@ -243,7 +249,7 @@ def build_and_run(out_dir: str = "llrq_report_cycle"):
         plt.plot(t_eval, Yhat[:, k], ":", alpha=0.8, label=f"ŷ{k+1} (estimate)", linewidth=1.5)
     
     # Mark step disturbance
-    plt.axvline(cfg.step_time, color='red', linestyle=':', alpha=0.7, label='Step disturbance')
+    plt.axvline(cfg.step_time, color='red', linestyle=':', alpha=0.7, label='Impulse disturbance')
     
     plt.xlabel("Time (s)"); plt.ylabel("Reduced state y"); plt.legend(ncol=2); 
     plt.title("Reduced State: Analytical Convergence to Target\n(y = projected log-deviation from reaction equilibria)")
@@ -254,7 +260,7 @@ def build_and_run(out_dir: str = "llrq_report_cycle"):
     fig = plt.figure(figsize=(8.2, 3.2))
     tracking_error = np.linalg.norm(Y - cfg.y_ref, axis=1)
     plt.plot(t_eval, tracking_error, 'b-', linewidth=2, label='||y - y*||₂')
-    plt.axvline(cfg.step_time, color='red', linestyle=':', alpha=0.7, label='Step disturbance')
+    plt.axvline(cfg.step_time, color='red', linestyle=':', alpha=0.7, label='Impulse disturbance')
     plt.xlabel("Time (s)"); plt.ylabel("Tracking error"); plt.legend()
     plt.title("Control Performance: Distance from Reference")
     plt.grid(True, alpha=0.3)
@@ -265,7 +271,7 @@ def build_and_run(out_dir: str = "llrq_report_cycle"):
     reaction_names = ["R1: A⇌B", "R2: B⇌C", "R3: C⇌A"]
     for j in range(dynamics.n_reactions):
         plt.plot(t_eval, Ufull[:, j], label=reaction_names[j], linewidth=2)
-    plt.axvline(cfg.step_time, color='red', linestyle=':', alpha=0.7, label='Step disturbance')
+    plt.axvline(cfg.step_time, color='red', linestyle=':', alpha=0.7, label='Impulse disturbance')
     plt.axhline(0, color='black', linestyle='-', alpha=0.3)
     plt.xlabel("Time (s)"); plt.ylabel("Control effort u"); 
     plt.title("Control Signals: Steady-State Drives + Feedback")
@@ -278,7 +284,7 @@ def build_and_run(out_dir: str = "llrq_report_cycle"):
     for j in range(dynamics.n_reactions):
         plt.plot(t_eval, Q_ratios[:, j], label=f"{reaction_names[j]}", linewidth=2)
     plt.axhline(1, color='black', linestyle='--', alpha=0.7, label='Equilibrium (Q/Keq = 1)')
-    plt.axvline(cfg.step_time, color='red', linestyle=':', alpha=0.7, label='Step disturbance')
+    plt.axvline(cfg.step_time, color='red', linestyle=':', alpha=0.7, label='Impulse disturbance')
     plt.xlabel("Time (s)"); plt.ylabel("Q/Keq ratio"); 
     plt.title("Reaction Quotient Ratios: Deviation from Equilibrium\n(>1 = forward favored, <1 = reverse favored)")
     plt.legend(); plt.grid(True, alpha=0.3)
@@ -314,7 +320,7 @@ def build_and_run(out_dir: str = "llrq_report_cycle"):
         except:
             pass  # Skip reference concentrations if computation fails
             
-        plt.axvline(cfg.step_time, color='red', linestyle=':', alpha=0.7, label='Step disturbance')
+        plt.axvline(cfg.step_time, color='red', linestyle=':', alpha=0.7, label='Impulse disturbance')
         plt.xlabel("Time (s)"); plt.ylabel("Concentration"); 
         plt.title("Species Concentrations: The Physical Variables We Care About")
         plt.legend(ncol=2); plt.grid(True, alpha=0.3)
@@ -358,7 +364,7 @@ def build_and_run(out_dir: str = "llrq_report_cycle"):
 <body>
   <h1>LLRQ Analytical Control Demo</h1>
   <p><b>Model:</b> 3-reaction ring (A⇌B⇌C⇌A). <b>Controller:</b> Analytical steady-state control with proportional feedback.<br/>
-     <b>Disturbances:</b> sinusoid + step in Keq at t={cfg.step_time:g}s. <b>Runtime horizon:</b> {cfg.T:g}s.</p>
+     <b>Disturbances:</b> sinusoid + impulse disturbance at t={cfg.step_time:g}s. <b>Runtime horizon:</b> {cfg.T:g}s.</p>
 
   <h2>What This Demo Shows</h2>
   <div class="card">
