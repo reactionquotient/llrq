@@ -1,12 +1,19 @@
 ---
 layout: page
 title: Examples
-nav_order: 6
+nav_order: 4
 ---
 
 # Examples
 
 Complete working examples demonstrating the LLRQ package capabilities.
+
+## Interactive Tools
+
+### [Mass Action Simulator & Comparison](mass-action-simulator.html)
+Interactive comparison between LLRQ and traditional mass action kinetics with embedded visualizations and parameter exploration tools.
+
+## Code Examples
 
 ## Simple Reaction Example
 

@@ -12,9 +12,7 @@ theme: minima
 header_pages:
   - index.md
   - getting-started.md
-  - api-reference.md
-  - tutorials.md
-  - theory.md
+  - documentation.md
   - examples.md
 
 # Collections for better organization

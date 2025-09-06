@@ -1,18 +1,19 @@
 source "https://rubygems.org"
 
 # Jekyll
-gem "jekyll", "~> 4.3"
+gem "jekyll", "~> 4.0"
 
-# Theme
+# Theme (required by _config.yml)
 gem "minima", "~> 2.5"
 
 # Plugins
-gem "jekyll-feed", "~> 0.12"
-gem "jekyll-sitemap"
-gem "jekyll-seo-tag"
+gem "jekyll-feed", "~> 0.15"
+gem "jekyll-sitemap", "~> 1.4"
+gem "jekyll-seo-tag", "~> 2.8"
 
-# GitHub Pages compatibility
-gem "github-pages", group: :jekyll_plugins
+# Markdown processing
+gem "kramdown-parser-gfm"
+gem "rouge"
 
-# For Ruby 3.0+
+# For serving locally  
 gem "webrick", "~> 1.7"
