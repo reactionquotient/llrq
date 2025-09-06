@@ -35,9 +35,9 @@ class TestBasicWorkflows:
         
         dynamics = LLRQDynamics.from_mass_action(
             network=network,
-            equilibrium_point=c_star,
             forward_rates=k_plus,
             backward_rates=k_minus,
+            initial_concentrations=c_star,
             mode='equilibrium'
         )
         
@@ -85,9 +85,9 @@ class TestBasicWorkflows:
         
         dynamics = LLRQDynamics.from_mass_action(
             network=network,
-            equilibrium_point=c_star,
             forward_rates=k_plus,
             backward_rates=k_minus,
+            initial_concentrations=c_star,
             mode='equilibrium'
         )
         
@@ -121,9 +121,9 @@ class TestBasicWorkflows:
         
         dynamics = LLRQDynamics.from_mass_action(
             network=network,
-            equilibrium_point=c_star,
             forward_rates=k_plus,
             backward_rates=k_minus,
+            initial_concentrations=c_star,
             mode='equilibrium'
         )
         
@@ -195,9 +195,9 @@ class TestComplexNetworks:
         
         dynamics = LLRQDynamics.from_mass_action(
             network=network,
-            equilibrium_point=c_star,
             forward_rates=k_plus,
             backward_rates=k_minus,
+            initial_concentrations=c_star,
             mode='equilibrium'
         )
         
@@ -230,9 +230,9 @@ class TestComplexNetworks:
         
         dynamics = LLRQDynamics.from_mass_action(
             network=network,
-            equilibrium_point=c_star,
             forward_rates=k_plus,
             backward_rates=k_minus,
+            initial_concentrations=c_star,
             mode='equilibrium'
         )
         
@@ -266,9 +266,9 @@ class TestComplexNetworks:
         
         dynamics = LLRQDynamics.from_mass_action(
             network=network,
-            equilibrium_point=c_star,
             forward_rates=k_plus,
             backward_rates=k_minus,
+            initial_concentrations=c_star,
             mode='equilibrium'
         )
         
@@ -309,9 +309,9 @@ class TestComplexNetworks:
         
         dynamics = LLRQDynamics.from_mass_action(
             network=network,
-            equilibrium_point=c_star,
             forward_rates=k_plus,
             backward_rates=k_minus,
+            initial_concentrations=c_star,
             mode='equilibrium'
         )
         
@@ -379,17 +379,17 @@ class TestEquilibriumModes:
         
         # Compute dynamics matrix directly
         result_with_reduction = network.compute_dynamics_matrix(
-            equilibrium_point=c_star,
             forward_rates=k_plus,
             backward_rates=k_minus,
+            initial_concentrations=c_star,
             mode='equilibrium',
             reduce_to_image=True
         )
         
         result_without_reduction = network.compute_dynamics_matrix(
-            equilibrium_point=c_star,
             forward_rates=k_plus,
             backward_rates=k_minus,
+            initial_concentrations=c_star,
             mode='equilibrium',
             reduce_to_image=False
         )
@@ -412,16 +412,16 @@ class TestEquilibriumModes:
         k_minus = np.array([1.0])  # Symmetric rates
         
         result_sym = network.compute_dynamics_matrix(
-            equilibrium_point=c_star,
             forward_rates=k_plus,
             backward_rates=k_minus,
+            initial_concentrations=c_star,
             enforce_symmetry=True
         )
         
         result_no_sym = network.compute_dynamics_matrix(
-            equilibrium_point=c_star,
             forward_rates=k_plus,
             backward_rates=k_minus,
+            initial_concentrations=c_star,
             enforce_symmetry=False
         )
         
@@ -518,9 +518,9 @@ class TestStabilityAndConvergence:
         
         dynamics = LLRQDynamics.from_mass_action(
             network=network,
-            equilibrium_point=c_star,
             forward_rates=k_plus,
             backward_rates=k_minus,
+            initial_concentrations=c_star,
             mode='equilibrium'
         )
         

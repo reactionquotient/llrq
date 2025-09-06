@@ -437,9 +437,9 @@ class TestFromMassAction:
         
         dynamics = LLRQDynamics.from_mass_action(
             network=network,
-            equilibrium_point=c_star,
             forward_rates=k_plus,
             backward_rates=k_minus,
+            initial_concentrations=c_star,
             mode='equilibrium'
         )
         
@@ -458,9 +458,9 @@ class TestFromMassAction:
         
         dynamics = LLRQDynamics.from_mass_action(
             network=network,
-            equilibrium_point=c_star,
             forward_rates=k_plus,
             backward_rates=k_minus,
+            initial_concentrations=c_star,
             mode='equilibrium'
         )
         
@@ -477,9 +477,9 @@ class TestFromMassAction:
         
         dynamics = LLRQDynamics.from_mass_action(
             network=network,
-            equilibrium_point=c_star,
             forward_rates=k_plus,
             backward_rates=k_minus,
+            initial_concentrations=c_star,
             mode='equilibrium'
         )
         
@@ -512,9 +512,9 @@ class TestFromMassAction:
         
         dynamics = LLRQDynamics.from_mass_action(
             network=network,
-            equilibrium_point=c_star,
             forward_rates=k_plus,
             backward_rates=k_minus,
+            initial_concentrations=c_star,
             mode='equilibrium'
         )
         

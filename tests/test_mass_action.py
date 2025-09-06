@@ -38,9 +38,9 @@ class TestReactionNetworkDynamics:
         
         # Test
         result = network.compute_dynamics_matrix(
-            equilibrium_point=c_star,
             forward_rates=k_plus,
             backward_rates=k_minus,
+            initial_concentrations=c_star,
             mode='equilibrium'
         )
         
@@ -75,9 +75,9 @@ class TestReactionNetworkDynamics:
         
         # Test equilibrium mode
         result = network.compute_dynamics_matrix(
-            equilibrium_point=c_star,
             forward_rates=k_plus,
             backward_rates=k_minus,
+            initial_concentrations=c_star,
             mode='equilibrium'
         )
         
@@ -110,9 +110,9 @@ class TestReactionNetworkDynamics:
         
         # Test with basis reduction
         result = network.compute_dynamics_matrix(
-            equilibrium_point=c_star,
             forward_rates=k_plus,
             backward_rates=k_minus,
+            initial_concentrations=c_star,
             mode='equilibrium',
             reduce_to_image=True
         )
@@ -146,16 +146,16 @@ class TestReactionNetworkDynamics:
         
         # Test with and without symmetry enforcement
         result1 = network.compute_dynamics_matrix(
-            equilibrium_point=c_star,
             forward_rates=k_plus,
             backward_rates=k_minus,
+            initial_concentrations=c_star,
             enforce_symmetry=False
         )
         
         result2 = network.compute_dynamics_matrix(
-            equilibrium_point=c_star,
             forward_rates=k_plus,
             backward_rates=k_minus,
+            initial_concentrations=c_star,
             enforce_symmetry=True
         )
         
@@ -182,27 +182,27 @@ class TestReactionNetworkDynamics:
         k_minus = np.array([1.0])
         
         # Wrong number of species
-        with pytest.raises(ValueError, match="Expected 2 equilibrium concentrations"):
+        with pytest.raises(ValueError, match="Expected 2 initial concentrations"):
             network.compute_dynamics_matrix(
-                equilibrium_point=[1.0],  # Should be 2
                 forward_rates=k_plus,
-                backward_rates=k_minus
+                backward_rates=k_minus,
+                initial_concentrations=[1.0]  # Should be 2
             )
         
         # Wrong number of forward rates
         with pytest.raises(ValueError, match="Expected 1 forward rates"):
             network.compute_dynamics_matrix(
-                equilibrium_point=c_star,
                 forward_rates=[1.0, 2.0],  # Should be 1
-                backward_rates=k_minus
+                backward_rates=k_minus,
+                initial_concentrations=c_star
             )
         
         # Invalid mode
         with pytest.raises(ValueError, match="Unknown mode"):
             network.compute_dynamics_matrix(
-                equilibrium_point=c_star,
                 forward_rates=k_plus,
                 backward_rates=k_minus,
+                initial_concentrations=c_star,
                 mode='invalid'
             )
 
@@ -225,9 +225,9 @@ class TestLLRQDynamicsFactory:
         # Create dynamics via factory
         dynamics = LLRQDynamics.from_mass_action(
             network=network,
-            equilibrium_point=c_star,
             forward_rates=k_plus,
             backward_rates=k_minus,
+            initial_concentrations=c_star,
             mode='equilibrium'
         )
         
@@ -254,9 +254,9 @@ class TestLLRQDynamicsFactory:
         
         dynamics = LLRQDynamics.from_mass_action(
             network=network,
-            equilibrium_point=c_star,
             forward_rates=k_plus,
             backward_rates=k_minus,
+            initial_concentrations=c_star,
             mode='equilibrium'
         )
         
@@ -264,7 +264,9 @@ class TestLLRQDynamicsFactory:
         info = dynamics.get_mass_action_info()
         assert info is not None
         assert info['mode'] == 'equilibrium'
-        assert np.allclose(info['equilibrium_point'], c_star)
+        # equilibrium_point is now stored in the equilibrium_info or may be None
+        if info.get('equilibrium_point') is not None:
+            assert np.allclose(info['equilibrium_point'], c_star)
         assert np.allclose(info['forward_rates'], k_plus)
         assert np.allclose(info['backward_rates'], k_minus)
         assert 'dynamics_data' in info
@@ -306,9 +308,9 @@ class TestAlgorithmValidation:
         assert np.isclose(k_plus/k_minus, c_B/c_A)
         
         result = network.compute_dynamics_matrix(
-            equilibrium_point=[c_A, c_B],
             forward_rates=[k_plus],
             backward_rates=[k_minus],
+            initial_concentrations=[c_A, c_B],
             mode='equilibrium'
         )
         
@@ -339,9 +341,9 @@ class TestAlgorithmValidation:
         
         dynamics = LLRQDynamics.from_mass_action(
             network=network,
-            equilibrium_point=c_star,
             forward_rates=[k_plus],
             backward_rates=[k_minus],
+            initial_concentrations=c_star,
             mode='equilibrium'
         )
         

@@ -33,9 +33,9 @@ def test_simple_reversible():
     
     # Test equilibrium mode
     result = network.compute_dynamics_matrix(
-        equilibrium_point=c_star,
         forward_rates=k_plus,
         backward_rates=k_minus,
+        initial_concentrations=c_star,
         mode='equilibrium'
     )
     
@@ -67,9 +67,9 @@ def test_factory_method():
     
     dynamics = LLRQDynamics.from_mass_action(
         network=network,
-        equilibrium_point=c_star,
         forward_rates=k_plus,
         backward_rates=k_minus,
+        initial_concentrations=c_star,
         mode='equilibrium'
     )
     

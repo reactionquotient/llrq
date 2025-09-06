@@ -186,9 +186,9 @@ class TestSingularMatrices:
             warnings.simplefilter("always")
             
             result = network.compute_dynamics_matrix(
-                equilibrium_point=c_star,
                 forward_rates=k_plus,
                 backward_rates=k_minus,
+                initial_concentrations=c_star,
                 mode='nonequilibrium'  # More likely to hit singularities
             )
             
@@ -210,9 +210,9 @@ class TestInvalidInputs:
         # Wrong number of forward rates
         with pytest.raises(ValueError):
             network.compute_dynamics_matrix(
-                equilibrium_point=[1.0, 2.0],
                 forward_rates=[1.0, 2.0],  # Should be 1
-                backward_rates=[1.0]
+                backward_rates=[1.0],
+                initial_concentrations=[1.0, 2.0]
             )
 
     def test_empty_arrays(self):
@@ -283,9 +283,9 @@ class TestNumericalStability:
         try:
             dynamics = LLRQDynamics.from_mass_action(
                 network=network,
-                equilibrium_point=c_star,
                 forward_rates=k_plus,
                 backward_rates=k_minus,
+                initial_concentrations=c_star,
                 mode='equilibrium'
             )
             
@@ -353,9 +353,9 @@ class TestNumericalStability:
         
         try:
             result = network.compute_dynamics_matrix(
-                equilibrium_point=c_star,
                 forward_rates=k_plus,
                 backward_rates=k_minus,
+                initial_concentrations=c_star,
                 mode='nonequilibrium'  # Uses numerical derivatives
             )
             

@@ -49,9 +49,9 @@ class TestNetworkScaling:
         
         dynamics = LLRQDynamics.from_mass_action(
             network=network,
-            equilibrium_point=c_star,
             forward_rates=k_plus,
             backward_rates=k_minus,
+            initial_concentrations=c_star,
             mode='equilibrium'
         )
         
@@ -82,9 +82,9 @@ class TestNetworkScaling:
         
         dynamics = LLRQDynamics.from_mass_action(
             network=network,
-            equilibrium_point=c_star,
             forward_rates=k_plus,
             backward_rates=k_minus,
+            initial_concentrations=c_star,
             mode='equilibrium'
         )
         
@@ -116,9 +116,9 @@ class TestNetworkScaling:
         
         dynamics = LLRQDynamics.from_mass_action(
             network=network,
-            equilibrium_point=c_star,
             forward_rates=k_plus,
             backward_rates=k_minus,
+            initial_concentrations=c_star,
             mode='equilibrium'
         )
         
@@ -182,9 +182,9 @@ class TestNetworkScaling:
         
         dynamics = LLRQDynamics.from_mass_action(
             network=network,
-            equilibrium_point=c_star,
             forward_rates=k_plus,
             backward_rates=k_minus,
+            initial_concentrations=c_star,
             mode='equilibrium'
         )
         
@@ -248,9 +248,9 @@ class TestMatrixComputationPerformance:
             start_time = time.time()
             
             result = network.compute_dynamics_matrix(
-                equilibrium_point=c_star,
                 forward_rates=k_plus,
                 backward_rates=k_minus,
+                initial_concentrations=c_star,
                 mode='equilibrium'
             )
             
