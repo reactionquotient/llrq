@@ -92,24 +92,19 @@ def simulate_linear_dynamics(network, controller, cfg, t_eval):
         sinus = cfg.sinus_amp * np.array([np.sin(0.8*t), 0.3*np.sin(1.1*t)])[:len(y)]
         return sinus
     
+    # Compute constant steady-state control (feedforward only)
+    Q_target = controller.reduced_state_to_reaction_quotients(cfg.y_ref)
+    u_const = controller.compute_steady_state_control(cfg.y_ref)
+    
     # Simulate
     for i, t in enumerate(t_eval):
-        # Control
-        u = controller.compute_control(
-            controller.reduced_state_to_reaction_quotients(y),
-            controller.reduced_state_to_reaction_quotients(cfg.y_ref),
-            feedback_gain=cfg.feedback_gain
-        )
+        # Use constant control (no feedback)
+        u = u_const
         
         # Dynamics with disturbance
         u_red = B_red @ u
         d = disturbance(t)
         ydot = A @ y + u_red + d
-        
-        # Apply impulse disturbance
-        if abs(t - cfg.impulse_time) < dt/2:
-            if cfg.impulse_magnitude is not None:
-                y = y + cfg.impulse_magnitude
         
         # Integrate
         y = y + dt * ydot
@@ -150,20 +145,16 @@ def simulate_mass_action_dynamics(network, controller, cfg, t_eval):
     
     # Create simulator with LLRQ control capability
     sim = MassActionSimulator(network, rate_constants_ma, 
-                             B=controller.B, K_red=controller.K_red)
+                             B=controller.B, K_red=controller.K_red,
+                             lnKeq_consistent=controller.solver._lnKeq_consistent)
     
-    # Control function with proper feedforward + feedback
+    # Control function with constant feedforward only (same as linear)
     def control_function(t, Q_current):
         if cfg.y_ref is None:
             cfg.y_ref = np.array([0.1, -0.05])
         
-        # Use the same controller as linear simulation for consistency
-        Q_target = controller.reduced_state_to_reaction_quotients(cfg.y_ref)
-        u_total = controller.compute_control(
-            Q_current, Q_target, 
-            feedback_gain=cfg.feedback_gain,
-            feedforward=True  # Include steady-state control!
-        )
+        # Use same constant steady-state control as linear simulation
+        u_total = controller.compute_steady_state_control(cfg.y_ref)
         
         # Convert full control to reduced control
         # The controller returns control for selected reactions, we need to convert to u_red
@@ -178,20 +169,21 @@ def simulate_mass_action_dynamics(network, controller, cfg, t_eval):
         # Convert to reduced space: u_red = B^T @ u_full
         u_red = B.T @ u_full
         
-        # Apply impulse disturbance manually (smaller magnitude for mass action)
-        disturbance = np.zeros_like(u_red)
-        if abs(t - cfg.impulse_time) < 0.1:  # Apply impulse for short time
-            if cfg.impulse_magnitude is not None:
-                # Scale down significantly for mass action rate modification
-                disturbance = cfg.impulse_magnitude / 20
-        
-        # Add sinusoidal disturbance (also smaller)
-        sinus_dist = (cfg.sinus_amp / 2) * np.array([np.sin(0.8*t), 0.3*np.sin(1.1*t)])[:len(u_red)]
-        
-        return u_red + disturbance + sinus_dist
+        # Return both u_red and u_total for proper tracking
+        return u_red, u_total
     
-    # Simulate with LLRQ control
-    result = sim.simulate(t_eval, control_function)
+    # Define disturbance functions
+    def disturbance_function(t):
+        # Sinusoidal disturbance (same as linear simulation)
+        sinus = cfg.sinus_amp * np.array([np.sin(0.8*t), 0.3*np.sin(1.1*t)])[:controller.rankS]
+        return sinus
+    
+    # Simulate with LLRQ control and proper state disturbances
+    result = sim.simulate(
+        t_eval, 
+        control_function,
+        disturbance_function=disturbance_function
+    )
     result['method'] = 'Mass Action (Corrected)'
     
     # Add reduced state trajectory for comparison
@@ -201,9 +193,12 @@ def simulate_mass_action_dynamics(network, controller, cfg, t_eval):
         Y[i] = controller.reaction_quotients_to_reduced_state(result['reaction_quotients'][i])
     result['y'] = Y
     
-    # Convert u_red to full control for plotting compatibility
-    if 'u_red' in result:
-        result['u'] = result['u_red']  # Just use reduced control for plotting
+    # Use proper control for plotting (u_total for controlled reactions)
+    if 'u_total' in result:
+        result['u'] = result['u_total']
+    elif 'u_red' in result:
+        # Fallback to u_red if u_total not available
+        result['u'] = result['u_red']
     
     return result
 
@@ -248,7 +243,7 @@ def build_and_run_comparison(out_dir: str = "llrq_linear_vs_mass_action"):
     # Configuration
     cfg = ComparisonConfig()
     cfg.y_ref = np.array([0.1, -0.05])
-    cfg.impulse_magnitude = np.array([0.2, -0.1])
+    # cfg.impulse_magnitude = np.array([0.2, -0.1])  # Removed impulse disturbance
     
     # Time points
     t_eval = np.linspace(0, cfg.T, cfg.npoints)
@@ -278,7 +273,7 @@ def build_and_run_comparison(out_dir: str = "llrq_linear_vs_mass_action"):
     if mass_action_result:
         ax1.plot(t_eval, mass_action_result['y'][:, 0], 'r--', linewidth=2, label='Mass Action')
     ax1.axhline(cfg.y_ref[0], color='black', linestyle=':', alpha=0.7, label='Target')
-    ax1.axvline(cfg.impulse_time, color='red', linestyle=':', alpha=0.5, label='Impulse')
+    # ax1.axvline(cfg.impulse_time, color='red', linestyle=':', alpha=0.5, label='Impulse')  # Removed impulse
     ax1.set_xlabel('Time (s)')
     ax1.set_ylabel('y₁')
     ax1.set_title('Reduced State Component 1')
@@ -290,7 +285,7 @@ def build_and_run_comparison(out_dir: str = "llrq_linear_vs_mass_action"):
     if mass_action_result:
         ax2.plot(t_eval, mass_action_result['y'][:, 1], 'r--', linewidth=2, label='Mass Action')
     ax2.axhline(cfg.y_ref[1], color='black', linestyle=':', alpha=0.7, label='Target')
-    ax2.axvline(cfg.impulse_time, color='red', linestyle=':', alpha=0.5, label='Impulse')
+    # ax2.axvline(cfg.impulse_time, color='red', linestyle=':', alpha=0.5, label='Impulse')  # Removed impulse
     ax2.set_xlabel('Time (s)')
     ax2.set_ylabel('y₂')  
     ax2.set_title('Reduced State Component 2')
@@ -312,8 +307,8 @@ def build_and_run_comparison(out_dir: str = "llrq_linear_vs_mass_action"):
         if mass_action_result:
             ax.plot(t_eval, mass_action_result['concentrations'][:, i], '--', 
                    color=color, linewidth=2, label=f'Mass Action')
-        ax.axvline(cfg.impulse_time, color='red', linestyle=':', alpha=0.5, 
-                  label='Impulse' if i == 0 else '')
+        # ax.axvline(cfg.impulse_time, color='red', linestyle=':', alpha=0.5, 
+        #           label='Impulse' if i == 0 else '')  # Removed impulse
         ax.set_xlabel('Time (s)')
         ax.set_ylabel(f'[{species}]')
         ax.set_title(f'Species {species} Concentration')
@@ -332,7 +327,7 @@ def build_and_run_comparison(out_dir: str = "llrq_linear_vs_mass_action"):
         ax.plot(t_eval, linear_result['u'][:, i], 'b-', linewidth=2, label='Linear LLRQ')
         if mass_action_result and 'u' in mass_action_result:
             ax.plot(t_eval, mass_action_result['u'][:, i], 'r--', linewidth=2, label='Mass Action')
-        ax.axvline(cfg.impulse_time, color='red', linestyle=':', alpha=0.5, label='Impulse')
+        # ax.axvline(cfg.impulse_time, color='red', linestyle=':', alpha=0.5, label='Impulse')  # Removed impulse
         ax.axhline(0, color='black', linestyle='-', alpha=0.3)
         ax.set_xlabel('Time (s)')
         ax.set_ylabel('Control Input')

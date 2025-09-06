@@ -240,37 +240,10 @@ class LLRQSolver:
     def _compute_concentrations_from_reduced(self, Q_t: np.ndarray, c0: np.ndarray,
                                enforce_conservation: bool) -> Optional[np.ndarray]:
         """Reconstruct concentrations using conservation + reduced quotient constraints."""
-        if not enforce_conservation:
-            return None
-        C = self.network.find_conservation_laws()               # (n_c x n)
-        cons0 = self.network.compute_conserved_quantities(c0)   # (n_c,)
-        if C.shape[0] == 0:
-            warnings.warn("No conservation laws found, cannot compute concentrations")
-            return None
-        S = self.network.S
-        B = self._B
-        lnKeq = self._lnKeq_consistent
-        n = self.network.n_species
-        c_t = np.zeros((len(Q_t), n))
-        c_guess = np.maximum(c0, 1e-9)
-        for i in range(len(Q_t)):
-            # y_target = B^T x, with x = ln Q - ln Keq
-            y_target = B.T @ (np.log(Q_t[i]) - lnKeq)
-            def residual(u):
-                c = np.exp(u)
-                r1 = C @ c - cons0
-                r2 = y_target - (B.T @ (S.T @ u - lnKeq))
-                return np.concatenate([r1, r2])
-            try:
-                u0 = np.log(np.maximum(c_guess, 1e-12))
-                u_sol = fsolve(residual, u0, xtol=1e-9, maxfev=2000)
-                c_sol = np.maximum(np.exp(u_sol), 1e-12)
-                c_t[i] = c_sol
-                c_guess = c_sol
-            except Exception as e:
-                warnings.warn(f"Concentration solve failed at i={i}: {e}; using previous guess.")
-                c_t[i] = c_guess
-        return c_t
+        from .utils.concentration_utils import compute_concentrations_from_quotients
+        return compute_concentrations_from_quotients(
+            Q_t, c0, self.network, self._B, self._lnKeq_consistent, enforce_conservation
+        )
     
     def solve_single_reaction(self, 
                             reaction_id: str,

@@ -30,7 +30,8 @@ class MassActionSimulator:
     """
     
     def __init__(self, network: ReactionNetwork, rate_constants: Optional[Dict] = None,
-                 B: Optional[np.ndarray] = None, K_red: Optional[np.ndarray] = None):
+                 B: Optional[np.ndarray] = None, K_red: Optional[np.ndarray] = None,
+                 lnKeq_consistent: Optional[np.ndarray] = None):
         """Initialize mass action simulator with LLRQ control capability.
         
         Args:
@@ -38,6 +39,7 @@ class MassActionSimulator:
             rate_constants: Rate constants {reaction_id: (kf, kr)}. If None, uses defaults
             B: LLRQ basis matrix (r x rankS) - required for control
             K_red: Reduced relaxation matrix (rankS x rankS) - required for control
+            lnKeq_consistent: Consistent log equilibrium constants (r,) - required for disturbances
         """
         if not HAS_TELLURIUM:
             raise ImportError("tellurium is required for MassActionSimulator. "
@@ -47,6 +49,7 @@ class MassActionSimulator:
         self.rate_constants = rate_constants or self._default_rate_constants()
         self.B = B
         self.K_red = K_red
+        self.lnKeq_consistent = lnKeq_consistent
         self._model = None
         self._kf_base = None
         self._kr_base = None
@@ -199,15 +202,17 @@ class MassActionSimulator:
             self._model[f'kr{i+1}'] = float(self._kr_base[i])
     
     def simulate(self, time_points: np.ndarray, 
-                control_function: Optional[Callable[[float, np.ndarray], np.ndarray]] = None) -> Dict:
-        """Simulate the system over given time points with LLRQ control.
+                control_function: Optional[Callable[[float, np.ndarray], np.ndarray]] = None,
+                disturbance_function: Optional[Callable[[float], np.ndarray]] = None) -> Dict:
+        """Simulate the system over given time points with LLRQ control and state disturbances.
         
         Args:
             time_points: Array of time points
-            control_function: Function f(t, Q) -> u_red that returns reduced control input
+            control_function: Function f(t, Q) -> (u_red, u_total) that returns both reduced and full control
+            disturbance_function: Function f(t) -> d that returns state disturbance
             
         Returns:
-            Dict with 'time', 'concentrations', 'reaction_quotients', 'u_red'
+            Dict with 'time', 'concentrations', 'reaction_quotients', 'u_red', 'u_total'
         """
         n_times = len(time_points)
         n_species = len(self.network.species_ids)
@@ -217,7 +222,8 @@ class MassActionSimulator:
         # Storage
         concentrations = np.zeros((n_times, n_species))
         quotients = np.zeros((n_times, n_reactions))
-        controls = np.zeros((n_times, rankS)) if rankS > 0 else None
+        controls_red = np.zeros((n_times, rankS)) if rankS > 0 else None
+        controls_total = None  # Will be sized based on control function return
         
         # Initial conditions
         concentrations[0] = self.get_concentrations()
@@ -230,13 +236,34 @@ class MassActionSimulator:
             
             # Apply control if provided
             u_red = np.zeros(rankS) if rankS > 0 else np.array([])
+            u_total = None
             if control_function is not None:
                 Q_current = self.compute_reaction_quotients()
-                u_red = control_function(t_start, Q_current)
+                control_result = control_function(t_start, Q_current)
+                
+                # Handle both single return (u_red) and tuple return (u_red, u_total)
+                if isinstance(control_result, tuple):
+                    u_red, u_total = control_result
+                else:
+                    u_red = control_result
+                    u_total = None
+                
                 self.apply_llrq_control(u_red)
             
-            if controls is not None:
-                controls[i] = u_red
+            # Store controls
+            if controls_red is not None:
+                controls_red[i] = u_red
+            if u_total is not None:
+                if controls_total is None:
+                    controls_total = np.zeros((n_times, len(u_total)))
+                controls_total[i] = u_total
+            
+            # Apply state disturbances before simulation step
+            if disturbance_function is not None:
+                d_state = disturbance_function(t_start)
+                if len(d_state) > 0:
+                    # Convert reduced state disturbance to concentration changes
+                    self._apply_state_disturbance(d_state)
             
             # Simulate one time step
             try:
@@ -259,8 +286,10 @@ class MassActionSimulator:
             'method': 'Mass Action (Tellurium)'
         }
         
-        if controls is not None:
-            result['u_red'] = controls
+        if controls_red is not None:
+            result['u_red'] = controls_red
+        if controls_total is not None:
+            result['u_total'] = controls_total
             
         return result
     
@@ -276,3 +305,37 @@ class MassActionSimulator:
             kr = self._model[f'kr{i+1}']
             rates[rid] = (kf, kr)
         return rates
+    
+    def _apply_state_disturbance(self, d_reduced: np.ndarray):
+        """Apply state disturbance in reduced coordinates to species concentrations.
+        
+        Uses proper concentration reconstruction with conservation laws.
+        
+        Args:
+            d_reduced: Disturbance in reduced state coordinates (rankS,)
+        """
+        if self.B is None:
+            warnings.warn("Cannot apply state disturbance without LLRQ basis matrix B")
+            return
+            
+        if self.lnKeq_consistent is None:
+            warnings.warn("Cannot apply state disturbance without consistent equilibrium constants")
+            return
+        
+        # Get current concentrations
+        c_current = self.get_concentrations()
+        
+        # Apply disturbance using proper concentration reconstruction
+        try:
+            from .utils.concentration_utils import apply_state_disturbance_to_concentrations
+            
+            c_new = apply_state_disturbance_to_concentrations(
+                c_current, d_reduced, self.network, self.B, self.lnKeq_consistent
+            )
+            
+            # Update model concentrations
+            self.set_concentrations(c_new)
+            
+        except Exception as e:
+            warnings.warn(f"Failed to apply state disturbance: {e}. Disturbance ignored.")
+            return
