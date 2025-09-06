@@ -28,7 +28,7 @@ class ComparisonConfig:
     # Disturbances
     impulse_time: float = 20.0
     impulse_magnitude: np.ndarray = None
-    sinus_amp: float = 0.01  # Small amplitude to test disturbance consistency
+    sinus_amp: float = 0.1  # Larger amplitude to test robustness
     
     # Mass action parameters (if available)
     rate_constants: dict = None
