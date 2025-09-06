@@ -220,7 +220,7 @@ def build_and_run_comparison(out_dir: str = "llrq_linear_vs_mass_action"):
     network = _build_3cycle_network()
     
     # Use thermodynamically consistent Keq values (must satisfy Keq1 × Keq2 × Keq3 = 1)
-    Keq = np.array([2.0, 0.5, 1.0])  # 2.0 × 0.5 × 1.0 = 1.0 ✓
+    # Keq = np.array([2.0, 0.5, 1.0])  # 2.0 × 0.5 × 1.0 = 1.0 ✓
     
     # Define consistent rate constants
     rate_constants = {
@@ -229,13 +229,55 @@ def build_and_run_comparison(out_dir: str = "llrq_linear_vs_mass_action"):
         'R3': (3.0, 3.0)   # Keq = 1.0
     }
     
-    # Proper K matrix (diagonal approximation: K[i,i] = kf[i] + kr[i])
+    # Extract rate constants in order
     kf = np.array([rate_constants[rid][0] for rid in network.reaction_ids])
     kr = np.array([rate_constants[rid][1] for rid in network.reaction_ids])
-    K = np.diag(kf + kr)
     
-    dynamics = LLRQDynamics(network=network, equilibrium_constants=Keq, relaxation_matrix=K)
+    # Compute proper equilibrium concentrations analytically
+    # At steady state, all net fluxes = 0:
+    # v1: k1_f * [A] - k1_r * [B] = 0  =>  [B]/[A] = k1_f/k1_r = 3.0/1.5 = 2.0
+    # v2: k2_f * [B] - k2_r * [C] = 0  =>  [C]/[B] = k2_f/k2_r = 1.0/2.0 = 0.5  
+    # v3: k3_f * [C] - k3_r * [A] = 0  =>  [A]/[C] = k3_f/k3_r = 3.0/3.0 = 1.0
+    #
+    # This gives: [B] = 2[A], [C] = 0.5[B] = [A]
+    # With conservation [A] + [B] + [C] = total_mass:
+    # [A] + 2[A] + [A] = 4[A] = total_mass
+    
+    total_mass = 3.0  # Total conserved mass
+    c_A = total_mass / 4.0  # = 0.75
+    c_B = 2.0 * c_A         # = 1.5  
+    c_C = 1.0 * c_A         # = 0.75
+    
+    c_star = np.array([c_A, c_B, c_C])
+    
+    print(f"Computed equilibrium concentrations:")
+    print(f"  [A] = {c_A:.3f}, [B] = {c_B:.3f}, [C] = {c_C:.3f}")
+    print(f"  Total mass: {np.sum(c_star):.3f}")
+    
+    # Verify equilibrium by checking flux balance
+    flux1 = kf[0] * c_A - kr[0] * c_B  # Should be ~0
+    flux2 = kf[1] * c_B - kr[1] * c_C  # Should be ~0  
+    flux3 = kf[2] * c_C - kr[2] * c_A  # Should be ~0
+    print(f"  Net fluxes (should be ~0): v1={flux1:.6f}, v2={flux2:.6f}, v3={flux3:.6f}")
+    print(f"  Max flux error: {max(abs(flux1), abs(flux2), abs(flux3)):.2e}")
+    
+    # Use proper mass action algorithm to compute K matrix
+    dynamics = LLRQDynamics.from_mass_action(
+        network=network,
+        equilibrium_point=c_star,
+        forward_rates=kf,
+        backward_rates=kr,
+        mode='equilibrium',
+        reduce_basis=False  # Keep full dimension for controller compatibility
+    )
+    
     solver = LLRQSolver(dynamics)
+    
+    # Print the properly computed K matrix
+    print(f"Proper K matrix from mass action algorithm:")
+    print(f"K = \n{dynamics.K}")
+    print(f"Eigenvalues: {np.linalg.eigvals(dynamics.K)}")
+    print(f"Equilibrium constants: {dynamics.Keq}")
     
     # Controller
     controller = LLRQController(solver, controlled_reactions=["R1", "R3"])
