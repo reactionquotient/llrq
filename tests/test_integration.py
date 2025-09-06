@@ -225,8 +225,8 @@ class TestComplexNetworks:
                                 ]))
         
         c_star = np.array([1.0, 1.0, 1.0])
-        k_plus = np.array([1.0, 1.0, 1.0])
-        k_minus = np.array([0.1, 0.1, 0.1])  # Strongly forward bias
+        k_plus = np.array([1.0, 1.0, 0.001])  # Third reaction has very low forward rate
+        k_minus = np.array([0.1, 0.1, 0.1])   # Now K₁×K₂×K₃ = 10×10×0.01 = 1 (thermodynamically consistent for cycle)
         
         dynamics = LLRQDynamics.from_mass_action(
             network=network,
@@ -344,18 +344,18 @@ class TestEquilibriumModes:
         # Test equilibrium mode
         dynamics_eq = LLRQDynamics.from_mass_action(
             network=network,
-            equilibrium_point=c_star,
             forward_rates=k_plus,
             backward_rates=k_minus,
+            initial_concentrations=c_star,
             mode='equilibrium'
         )
         
         # Test nonequilibrium mode
         dynamics_neq = LLRQDynamics.from_mass_action(
             network=network,
-            equilibrium_point=c_star,
             forward_rates=k_plus,
             backward_rates=k_minus,
+            initial_concentrations=c_star,
             mode='nonequilibrium'
         )
         
@@ -633,9 +633,9 @@ class TestErrorRecoveryAndRobustness:
         try:
             dynamics = LLRQDynamics.from_mass_action(
                 network=network,
-                equilibrium_point=c_star,
                 forward_rates=k_plus,
                 backward_rates=k_minus,
+                initial_concentrations=c_star,
                 mode='equilibrium'
             )
             

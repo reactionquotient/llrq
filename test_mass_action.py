@@ -86,9 +86,9 @@ def test_two_reaction_network():
     
     # Test equilibrium mode
     result = network.compute_dynamics_matrix(
-        equilibrium_point=c_star,
         forward_rates=k_plus,
         backward_rates=k_minus,
+        initial_concentrations=c_star,
         mode='equilibrium',
         reduce_to_image=True
     )
@@ -106,9 +106,9 @@ def test_two_reaction_network():
     
     # Test nonequilibrium mode
     result_neq = network.compute_dynamics_matrix(
-        equilibrium_point=c_star,
         forward_rates=k_plus,
         backward_rates=k_minus,
+        initial_concentrations=c_star,
         mode='nonequilibrium'
     )
     
@@ -138,17 +138,17 @@ def test_symmetry_enforcement():
     
     # Without symmetry enforcement
     result1 = network.compute_dynamics_matrix(
-        equilibrium_point=c_star,
         forward_rates=k_plus,
         backward_rates=k_minus,
+        initial_concentrations=c_star,
         enforce_symmetry=False
     )
     
     # With symmetry enforcement
     result2 = network.compute_dynamics_matrix(
-        equilibrium_point=c_star,
         forward_rates=k_plus,
         backward_rates=k_minus,
+        initial_concentrations=c_star,
         enforce_symmetry=True
     )
     
@@ -193,9 +193,9 @@ def test_conservation_laws():
     k_minus = np.array([0.5])
     
     result = network.compute_dynamics_matrix(
-        equilibrium_point=c_star,
         forward_rates=k_plus,
         backward_rates=k_minus,
+        initial_concentrations=c_star,
         mode='equilibrium',
         reduce_to_image=True
     )
