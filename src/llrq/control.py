@@ -184,7 +184,7 @@ class LLRQController:
         """
         return self.solver._compute_concentrations_from_reduced(
             Q_target[None, :], initial_concentrations, enforce_conservation=True
-        )[0]
+        )
 
 
 class AdaptiveController(LLRQController):

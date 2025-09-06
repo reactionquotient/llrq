@@ -28,7 +28,7 @@ class ComparisonConfig:
     # Disturbances
     impulse_time: float = 20.0
     impulse_magnitude: np.ndarray = None
-    sinus_amp: float = 0.1
+    sinus_amp: float = 0.0  # Set to zero to test pure control convergence
     
     # Mass action parameters (if available)
     rate_constants: dict = None
@@ -119,7 +119,7 @@ def simulate_linear_dynamics(network, controller, cfg, t_eval):
     for i in range(n):
         C_traj[i] = controller.solver._compute_concentrations_from_reduced(
             Q_traj[i:i+1], c0, True
-        )[0]
+        )
     
     return {
         'time': t_eval,
@@ -261,6 +261,44 @@ def build_and_run_comparison(out_dir: str = "llrq_linear_vs_mass_action"):
         mass_action_result = simulate_mass_action_dynamics(network, controller, cfg, t_eval)
     else:
         print("Mass action simulation not available")
+    
+    # Add concentration debugging
+    c0 = np.array([2.0, 0.2, 0.1])
+    Q_target = controller.reduced_state_to_reaction_quotients(cfg.y_ref)
+    c_target = controller.compute_target_concentrations(Q_target, c0)
+    
+    print("\n=== CONCENTRATION ANALYSIS ===")
+    print(f"Initial concentrations: {c0}")
+    print(f"Target Q: {Q_target}")  
+    print(f"Target concentrations: {c_target}")
+    print(f"Target raw: {repr(c_target)}")
+    print(f"Target type: {type(c_target)}")
+    if hasattr(c_target, 'shape'):
+        print(f"Target shape: {c_target.shape}")
+        if len(c_target.shape) > 0:
+            print(f"Target total mass: {np.sum(c_target):.6f}")
+    else:
+        print(f"Target is scalar: {c_target}")
+    
+    print(f"\nLinear simulation:")
+    print(f"  C shape: {linear_result['C'].shape}")
+    print(f"  Initial concentrations: {linear_result['C'][0]}")
+    print(f"  Initial raw: {repr(linear_result['C'][0])}")
+    print(f"  Initial individual: [{linear_result['C'][0][0]:.6f}, {linear_result['C'][0][1]:.6f}, {linear_result['C'][0][2]:.6f}]")
+    print(f"  Final concentrations: {linear_result['C'][-1]}")
+    print(f"  Final individual: [{linear_result['C'][-1][0]:.6f}, {linear_result['C'][-1][1]:.6f}, {linear_result['C'][-1][2]:.6f}]")
+    print(f"  Final total mass: {np.sum(linear_result['C'][-1]):.6f}")
+    
+    if mass_action_result:
+        print(f"\nMass action simulation:")
+        print(f"  Initial concentrations: {mass_action_result['concentrations'][0]}")  
+        print(f"  Final concentrations: {mass_action_result['concentrations'][-1]}")
+        print(f"  Final total mass: {np.sum(mass_action_result['concentrations'][-1]):.6f}")
+        
+        # Concentration differences
+        c_diff = mass_action_result['concentrations'][-1] - linear_result['C'][-1]
+        print(f"  Concentration differences: {c_diff}")
+        print(f"  Max absolute difference: {np.max(np.abs(c_diff)):.6f}")
     
     # Create plots
     figs = {}
