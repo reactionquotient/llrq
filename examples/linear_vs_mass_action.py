@@ -152,26 +152,41 @@ def simulate_mass_action_dynamics(network, controller, cfg, t_eval):
     sim = MassActionSimulator(network, rate_constants_ma, 
                              B=controller.B, K_red=controller.K_red)
     
-    # Control function that returns reduced control input
+    # Control function with proper feedforward + feedback
     def control_function(t, Q_current):
         if cfg.y_ref is None:
             cfg.y_ref = np.array([0.1, -0.05])
         
-        # Convert to reduced coordinates for control computation
-        y_current = controller.reaction_quotients_to_reduced_state(Q_current)
+        # Use the same controller as linear simulation for consistency
+        Q_target = controller.reduced_state_to_reaction_quotients(cfg.y_ref)
+        u_total = controller.compute_control(
+            Q_current, Q_target, 
+            feedback_gain=cfg.feedback_gain,
+            feedforward=True  # Include steady-state control!
+        )
         
-        # Compute reduced control input (this is what LLRQ expects)
-        error = y_current - cfg.y_ref
-        u_red = -cfg.feedback_gain * error
+        # Convert full control to reduced control
+        # The controller returns control for selected reactions, we need to convert to u_red
+        G = controller.G  # Selection matrix (r x m)
+        B = controller.B  # Basis matrix (r x rankS)
         
-        # Apply impulse disturbance manually
+        # Full control vector (all reactions)
+        u_full = np.zeros(len(network.reaction_ids))
+        for i, idx in enumerate(controller.controlled_indices):
+            u_full[idx] = u_total[i]
+        
+        # Convert to reduced space: u_red = B^T @ u_full
+        u_red = B.T @ u_full
+        
+        # Apply impulse disturbance manually (smaller magnitude for mass action)
         disturbance = np.zeros_like(u_red)
         if abs(t - cfg.impulse_time) < 0.1:  # Apply impulse for short time
             if cfg.impulse_magnitude is not None:
-                disturbance = cfg.impulse_magnitude / 10  # Scale down for rate modification
+                # Scale down significantly for mass action rate modification
+                disturbance = cfg.impulse_magnitude / 20
         
-        # Add sinusoidal disturbance
-        sinus_dist = cfg.sinus_amp * np.array([np.sin(0.8*t), 0.3*np.sin(1.1*t)])[:len(u_red)]
+        # Add sinusoidal disturbance (also smaller)
+        sinus_dist = (cfg.sinus_amp / 2) * np.array([np.sin(0.8*t), 0.3*np.sin(1.1*t)])[:len(u_red)]
         
         return u_red + disturbance + sinus_dist
     
