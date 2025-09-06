@@ -7,7 +7,7 @@ reaction networks and computes reaction quotients.
 import numpy as np
 from typing import Dict, List, Tuple, Optional, Any, Union
 import warnings
-from scipy.linalg import pinv
+from scipy.linalg import pinv, svd, lstsq
 
 
 class ReactionNetwork:
@@ -74,6 +74,38 @@ class ReactionNetwork:
         """Number of reactions."""
         return len(self.reaction_ids)
     
+    def get_reactant_stoichiometry_matrix(self) -> np.ndarray:
+        """Extract reactant stoichiometry matrix A from stoichiometric matrix S.
+        
+        For reaction j, A[:,j] contains positive stoichiometric coefficients
+        for reactants (corresponding to negative entries in S).
+        
+        Returns:
+            Reactant stoichiometry matrix A (n_species × n_reactions)
+        """
+        return np.maximum(-self.S, 0)
+    
+    def get_product_stoichiometry_matrix(self) -> np.ndarray:
+        """Extract product stoichiometry matrix B from stoichiometric matrix S.
+        
+        For reaction j, B[:,j] contains positive stoichiometric coefficients
+        for products (corresponding to positive entries in S).
+        
+        Returns:
+            Product stoichiometry matrix B (n_species × n_reactions)
+        """
+        return np.maximum(self.S, 0)
+    
+    def _nullspace(self, M: np.ndarray, rtol: float = 1e-12) -> np.ndarray:
+        """Right nullspace of M (columns span ker(M))."""
+        U, s, Vt = svd(M, full_matrices=True)
+        rank = (s > rtol * s.max()).sum()
+        return Vt[rank:].T  # shape: cols = nullity
+    
+    def _left_nullspace(self, M: np.ndarray, rtol: float = 1e-12) -> np.ndarray:
+        """Left nullspace of M: columns L with L^T M = 0 (i.e., ker(M^T))."""
+        return self._nullspace(M.T, rtol)
+    
     def get_initial_concentrations(self) -> np.ndarray:
         """Get initial concentrations from species info.
         
@@ -88,6 +120,172 @@ class ReactionNetwork:
                 concentrations[i] = conc
         
         return concentrations
+    
+    def is_at_equilibrium(self, 
+                         concentrations: np.ndarray,
+                         forward_rates: np.ndarray,
+                         backward_rates: np.ndarray,
+                         tol: float = 1e-6) -> bool:
+        """Check if concentrations satisfy detailed balance (equilibrium condition).
+        
+        Tests whether Q_j(c) ≈ K_j for all reactions j, where:
+        - Q_j = reaction quotient for reaction j
+        - K_j = equilibrium constant = k_j⁺/k_j⁻
+        
+        Args:
+            concentrations: Species concentrations to test
+            forward_rates: Forward rate constants k⁺ [reactions]
+            backward_rates: Backward rate constants k⁻ [reactions]
+            tol: Relative tolerance for equilibrium test
+            
+        Returns:
+            True if concentrations are at equilibrium within tolerance
+        """
+        try:
+            # Compute reaction quotients at given concentrations
+            Q = self.compute_reaction_quotients(concentrations)
+            
+            # Compute equilibrium constants
+            K = forward_rates / backward_rates
+            
+            # Check detailed balance: Q ≈ K for all reactions
+            return np.allclose(Q, K, rtol=tol, atol=1e-12)
+        except (ValueError, ZeroDivisionError):
+            # If any computation fails, assume not at equilibrium
+            return False
+    
+    def compute_equilibrium(self, 
+                          forward_rates: np.ndarray,
+                          backward_rates: np.ndarray,
+                          initial_concentrations: Optional[np.ndarray] = None,
+                          tol: float = 1e-10, 
+                          max_iter: int = 100) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """Compute equilibrium concentrations for mass action network.
+        
+        Uses the detailed balance equilibrium algorithm to find equilibrium
+        concentrations that satisfy:
+        1. Detailed balance: Q_j(c*) = K_j for all reactions j
+        2. Conservation laws: conserved quantities match initial totals
+        
+        Args:
+            forward_rates: Forward rate constants k⁺ [reactions]
+            backward_rates: Backward rate constants k⁻ [reactions]
+            initial_concentrations: Initial concentrations for conservation [species]
+                                  If None, uses get_initial_concentrations()
+            tol: Convergence tolerance on conservation residual
+            max_iter: Maximum Newton iterations
+            
+        Returns:
+            Tuple of (equilibrium_concentrations, info_dict) where info contains
+            diagnostic information including convergence status
+            
+        Raises:
+            ValueError: If rate constants violate thermodynamic consistency
+        """
+        # Input validation
+        k_plus = np.asarray(forward_rates, dtype=float)
+        k_minus = np.asarray(backward_rates, dtype=float)
+        
+        if len(k_plus) != self.n_reactions or len(k_minus) != self.n_reactions:
+            raise ValueError(f"Expected {self.n_reactions} rate constants, "
+                           f"got {len(k_plus)} forward and {len(k_minus)} backward")
+        
+        if not np.all(k_plus > 0) or not np.all(k_minus > 0):
+            raise ValueError("All rate constants must be positive for equilibrium computation")
+        
+        # Get initial concentrations for conservation laws
+        if initial_concentrations is None:
+            c0 = self.get_initial_concentrations()
+        else:
+            c0 = np.asarray(initial_concentrations, dtype=float)
+            if len(c0) != self.n_species:
+                raise ValueError(f"Expected {self.n_species} initial concentrations, "
+                               f"got {len(c0)}")
+        
+        # Extract A, B matrices from stoichiometric matrix
+        A = self.get_reactant_stoichiometry_matrix()
+        B = self.get_product_stoichiometry_matrix()
+        
+        # Net stoichiometry and equilibrium constants
+        N = B - A  # This is the same as self.S
+        lnK = np.log(k_plus / k_minus)
+        
+        # 1) Solve N^T x = ln K for x = ln c (particular solution)
+        # This encodes detailed balance: Q(c) = K
+        NT = N.T
+        x_p, _, _, _ = lstsq(NT, lnK)  # particular solution
+        resid = np.linalg.norm(NT @ x_p - lnK)
+        
+        # Check thermodynamic consistency (Wegscheider conditions)
+        if resid > 1e-8:
+            raise ValueError(
+                f"Inconsistent equilibrium constants (||N^T x - lnK||={resid:.2e}). "
+                "Check Wegscheider conditions / rate constants."
+            )
+        
+        # 2) Add general solution: x = x_p + Z y, where Z spans ker(N^T)
+        Z = self._nullspace(NT)
+        p = Z.shape[1]  # Number of conserved moieties
+        
+        # If no conserved moieties, equilibrium is unique
+        if p == 0:
+            c_star = np.exp(x_p)
+            return c_star, {"iterations": 0, "conservation_residual": 0.0, 
+                           "n_conserved": 0, "thermodynamic_check": resid}
+        
+        # 3) Enforce conservation laws using initial totals
+        # L^T c is conserved, where L spans left nullspace of N
+        L = self._left_nullspace(N)
+        m = L.T @ c0  # Target conserved totals
+        
+        # Solve g(y) = L^T exp(x_p + Z y) - m = 0 via Newton's method
+        y = np.zeros(p)
+        for it in range(max_iter):
+            x = x_p + Z @ y
+            c = np.exp(x)
+            g = L.T @ c - m
+            g_norm = np.linalg.norm(g, ord=2)
+            
+            if g_norm < tol:
+                return c, {"iterations": it, "conservation_residual": float(g_norm), 
+                          "n_conserved": p, "thermodynamic_check": resid}
+            
+            # Jacobian: J = d/dy [L^T exp(x_p + Z y)] = L^T diag(c) Z
+            J = L.T @ (c[:, None] * Z)
+            
+            # Solve J Δy = -g
+            try:
+                dy, _, _, _ = lstsq(J, -g)
+            except Exception:
+                dy = -g  # Fallback step
+            
+            # Backtracking line search to ensure progress and positivity
+            step = 1.0
+            for _ in range(20):
+                y_trial = y + step * dy
+                x_trial = x_p + Z @ y_trial
+                c_trial = np.exp(x_trial)
+                g_trial = L.T @ c_trial - m
+                if np.linalg.norm(g_trial) < g_norm * (1 - 1e-4 * step):
+                    y = y_trial
+                    break
+                step *= 0.5
+            else:
+                # Could not improve; return best found
+                return c, {"iterations": it + 1, "conservation_residual": float(g_norm), 
+                          "n_conserved": p, "thermodynamic_check": resid,
+                          "warning": "Newton iteration stalled"}
+        
+        # If we exit loop without converging
+        final_c = np.exp(x_p + Z @ y)
+        final_g_norm = np.linalg.norm(L.T @ final_c - m)
+        return final_c, {
+            "iterations": max_iter,
+            "conservation_residual": float(final_g_norm),
+            "n_conserved": p,
+            "thermodynamic_check": resid,
+            "warning": "Max iterations reached"
+        }
     
     def compute_reaction_quotients(self, concentrations: np.ndarray) -> np.ndarray:
         """Compute reaction quotients for all reactions.
@@ -323,9 +521,9 @@ class ReactionNetwork:
         return "\n".join(lines)
     
     def compute_dynamics_matrix(self,
-                               equilibrium_point: np.ndarray,
                                forward_rates: np.ndarray,
                                backward_rates: np.ndarray,
+                               initial_concentrations: Optional[np.ndarray] = None,
                                mode: str = 'equilibrium',
                                reduce_to_image: bool = True,
                                enforce_symmetry: bool = False) -> Dict[str, Any]:
@@ -360,9 +558,11 @@ class ReactionNetwork:
         - Off-diagonal coupling shows how reactions influence each other
         
         Args:
-            equilibrium_point: Equilibrium/steady-state concentrations c* [species]
             forward_rates: Forward rate constants k⁺ [reactions]
             backward_rates: Backward rate constants k⁻ [reactions]
+            initial_concentrations: Species concentrations [species]
+                                  If at equilibrium, used directly; otherwise equilibrium is computed
+                                  If None, uses get_initial_concentrations() from species info
             mode: 'equilibrium' for near thermodynamic equilibrium,
                   'nonequilibrium' for general steady state
             reduce_to_image: Whether to reduce to Im(S^T) basis (recommended)
@@ -380,9 +580,9 @@ class ReactionNetwork:
             Simple A ⇌ B reaction:
             >>> network = ReactionNetwork(['A', 'B'], ['R1'], [[-1], [1]])
             >>> result = network.compute_dynamics_matrix(
-            ...     equilibrium_point=[1.0, 2.0],
             ...     forward_rates=[2.0],
             ...     backward_rates=[1.0],
+            ...     initial_concentrations=[1.0, 2.0],
             ...     mode='equilibrium'
             ... )
             >>> print(f"K = {result['K']}, stable = {result['eigenanalysis']['is_stable']}")
@@ -390,19 +590,39 @@ class ReactionNetwork:
         References:
             Diamond, S. (2025). "Log-Linear Reaction Quotient Dynamics"
         """
-        if len(equilibrium_point) != self.n_species:
-            raise ValueError(f"Expected {self.n_species} equilibrium concentrations, "
-                           f"got {len(equilibrium_point)}")
-        if len(forward_rates) != self.n_reactions:
-            raise ValueError(f"Expected {self.n_reactions} forward rates, "
-                           f"got {len(forward_rates)}")
-        if len(backward_rates) != self.n_reactions:
-            raise ValueError(f"Expected {self.n_reactions} backward rates, "
-                           f"got {len(backward_rates)}")
-        
-        c_star = np.array(equilibrium_point)
+        # Input validation
         k_plus = np.array(forward_rates)
         k_minus = np.array(backward_rates)
+        
+        if len(k_plus) != self.n_reactions:
+            raise ValueError(f"Expected {self.n_reactions} forward rates, "
+                           f"got {len(k_plus)}")
+        if len(k_minus) != self.n_reactions:
+            raise ValueError(f"Expected {self.n_reactions} backward rates, "
+                           f"got {len(k_minus)}")
+        
+        # Get or compute equilibrium point
+        if initial_concentrations is None:
+            initial_concentrations = self.get_initial_concentrations()
+        else:
+            initial_concentrations = np.array(initial_concentrations)
+            if len(initial_concentrations) != self.n_species:
+                raise ValueError(f"Expected {self.n_species} initial concentrations, "
+                               f"got {len(initial_concentrations)}")
+        
+        # Check if already at equilibrium
+        if self.is_at_equilibrium(initial_concentrations, k_plus, k_minus):
+            # Use provided concentrations as equilibrium
+            c_star = initial_concentrations
+            equilibrium_info = {"already_at_equilibrium": True, "iterations": 0}
+            result_has_equilibrium_info = True
+        else:
+            # Compute equilibrium from initial concentrations
+            c_star, equilibrium_info = self.compute_equilibrium(
+                k_plus, k_minus, initial_concentrations
+            )
+            equilibrium_info["already_at_equilibrium"] = False
+            result_has_equilibrium_info = True
         
         # Form D* = Diag(c*)
         D_star = np.diag(c_star)
@@ -441,6 +661,11 @@ class ReactionNetwork:
             'eigenvectors': eigenvecs,
             'is_stable': np.all(eigenvals.real >= -1e-12)
         }
+        
+        # Add equilibrium computation info if computed automatically
+        if result_has_equilibrium_info:
+            result['equilibrium_info'] = equilibrium_info
+            result['equilibrium_point'] = c_star
         
         return result
     

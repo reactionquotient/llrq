@@ -311,9 +311,9 @@ class LLRQDynamics:
     @classmethod
     def from_mass_action(cls,
                         network: ReactionNetwork,
-                        equilibrium_point: np.ndarray,
                         forward_rates: np.ndarray,
                         backward_rates: np.ndarray,
+                        initial_concentrations: Optional[np.ndarray] = None,
                         mode: str = 'equilibrium',
                         external_drive: Optional[Callable[[float], np.ndarray]] = None,
                         reduce_basis: bool = True,
@@ -358,9 +358,11 @@ class LLRQDynamics:
         
         Args:
             network: ReactionNetwork defining stoichiometry and species
-            equilibrium_point: Equilibrium/steady-state concentrations c* [species]
             forward_rates: Forward rate constants k⁺ [reactions]  
             backward_rates: Backward rate constants k⁻ [reactions]
+            initial_concentrations: Species concentrations [species]
+                                  If at equilibrium, used directly; otherwise equilibrium is computed
+                                  If None, uses get_initial_concentrations() from network
             mode: Algorithm mode - 'equilibrium' (near thermodynamic equilibrium)
                   or 'nonequilibrium' (general steady state)
             external_drive: External drive function u(t) → array[reactions]
@@ -381,10 +383,10 @@ class LLRQDynamics:
             ...     [[-1, 1, 1], [-1, 1, 0], [1, -1, -1], [0, 0, 1]]
             ... )
             >>> dynamics = LLRQDynamics.from_mass_action(
-            ...     network, 
-            ...     equilibrium_point=[1.0, 2.0, 0.1, 0.5],
+            ...     network,
             ...     forward_rates=[2.0, 1.0, 5.0],
             ...     backward_rates=[1.0, 2.0, 0.0],
+            ...     initial_concentrations=[1.0, 2.0, 0.1, 0.5],
             ...     mode='equilibrium'
             ... )
             >>> print(f"Relaxation timescales: {1/dynamics.compute_eigenanalysis()['eigenvalues'].real}")
@@ -398,9 +400,9 @@ class LLRQDynamics:
         """
         # Compute dynamics matrix from mass action
         dynamics_data = network.compute_dynamics_matrix(
-            equilibrium_point=equilibrium_point,
             forward_rates=forward_rates,
             backward_rates=backward_rates,
+            initial_concentrations=initial_concentrations,
             mode=mode,
             reduce_to_image=reduce_basis,
             enforce_symmetry=enforce_symmetry
@@ -425,7 +427,7 @@ class LLRQDynamics:
         # Store additional mass action data
         dynamics._mass_action_data = dynamics_data
         dynamics._mass_action_mode = mode
-        dynamics._equilibrium_point = np.array(equilibrium_point)
+        dynamics._equilibrium_point = dynamics_data.get('equilibrium_point', None)
         dynamics._forward_rates = k_plus
         dynamics._backward_rates = k_minus
         
