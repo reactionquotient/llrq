@@ -1,9 +1,6 @@
 <!-- Custom head content for LLRQ documentation -->
 
-<!-- MathJax for mathematical equations -->
-<script type="text/javascript" async
-  src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js">
-</script>
+<!-- MathJax Configuration - MUST be loaded before MathJax script -->
 <script type="text/javascript">
   window.MathJax = {
     tex: {
@@ -14,8 +11,18 @@
     },
     options: {
       skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre']
+    },
+    startup: {
+      pageReady: () => {
+        return MathJax.startup.defaultPageReady();
+      }
     }
   };
+</script>
+
+<!-- MathJax for mathematical equations -->
+<script type="text/javascript" async
+  src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js">
 </script>
 
 <!-- Syntax highlighting for code blocks -->
