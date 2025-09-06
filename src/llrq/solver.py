@@ -21,11 +21,26 @@ class LLRQSolver:
     robust numerical integration with conservation law enforcement.
     """
     
-    def __init__(self, dynamics: LLRQDynamics):
+    def __init__(self, dynamics: LLRQDynamics, simulation_mode: str = 'linear'):
         """Initialize solver with dynamics system.
+        
+        Args:
+            dynamics: LLRQDynamics system
+            simulation_mode: 'linear' for LLRQ approximation, 'mass_action' for true kinetics
         """
         self.dynamics = dynamics
         self.network = dynamics.network
+        self.simulation_mode = simulation_mode
+        
+        # Initialize mass action simulator if requested
+        self._mass_action_sim = None
+        if simulation_mode == 'mass_action':
+            try:
+                from .mass_action_simulator import MassActionSimulator
+                self._mass_action_sim = MassActionSimulator(self.network)
+            except ImportError:
+                warnings.warn("Mass action simulation not available. Falling back to linear mode.")
+                self.simulation_mode = 'linear'
 
         # --- Build reduced subspace for Im(S^T) (handles cycles) ---
         S = self.network.S  # (n x r)

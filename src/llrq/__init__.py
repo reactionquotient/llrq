@@ -21,6 +21,14 @@ from .llrq_dynamics import LLRQDynamics
 from .solver import LLRQSolver
 from .visualization import LLRQVisualizer
 
+# Control and simulation
+from .control import LLRQController, AdaptiveController, design_lqr_controller
+try:
+    from .mass_action_simulator import MassActionSimulator
+except ImportError:
+    # Mass action simulation not available without roadrunner/tellurium
+    pass
+
 # Convenience functions
 def from_sbml(sbml_file: str, 
               equilibrium_constants=None,
@@ -127,6 +135,12 @@ __all__ = [
     'LLRQDynamics',
     'LLRQSolver',
     'LLRQVisualizer',
+    
+    # Control and simulation
+    'LLRQController',
+    'AdaptiveController', 
+    'design_lqr_controller',
+    'MassActionSimulator',  # May not be available
     
     # Convenience functions
     'from_sbml',
