@@ -137,38 +137,58 @@ def simulate_linear_dynamics(network, controller, cfg, t_eval):
 
 
 def simulate_mass_action_dynamics(network, controller, cfg, t_eval):
-    """Simulate using true mass action kinetics."""
+    """Simulate using true mass action kinetics with corrected LLRQ control."""
     if not HAS_MASS_ACTION:
         return None
         
-    # Set up mass action simulator
-    rate_constants = cfg.rate_constants or {
-        'R1': (2.0, 1.0),  # kf, kr
-        'R2': (1.0, 2.0), 
-        'R3': (1.5, 0.5)
+    # Use the same consistent rate constants as the linear system
+    rate_constants_ma = {
+        'R1': (3.0, 1.5),  # Keq = 2.0
+        'R2': (1.0, 2.0),  # Keq = 0.5
+        'R3': (3.0, 3.0)   # Keq = 1.0
     }
     
-    sim = MassActionSimulator(network, rate_constants)
+    # Create simulator with LLRQ control capability
+    sim = MassActionSimulator(network, rate_constants_ma, 
+                             B=controller.B, K_red=controller.K_red)
     
-    # Control function
+    # Control function that returns reduced control input
     def control_function(t, Q_current):
         if cfg.y_ref is None:
             cfg.y_ref = np.array([0.1, -0.05])
-            
-        Q_target = controller.reduced_state_to_reaction_quotients(cfg.y_ref)
-        u = controller.compute_control(Q_current, Q_target, feedback_gain=cfg.feedback_gain)
-        return u
+        
+        # Convert to reduced coordinates for control computation
+        y_current = controller.reaction_quotients_to_reduced_state(Q_current)
+        
+        # Compute reduced control input (this is what LLRQ expects)
+        error = y_current - cfg.y_ref
+        u_red = -cfg.feedback_gain * error
+        
+        # Apply impulse disturbance manually
+        disturbance = np.zeros_like(u_red)
+        if abs(t - cfg.impulse_time) < 0.1:  # Apply impulse for short time
+            if cfg.impulse_magnitude is not None:
+                disturbance = cfg.impulse_magnitude / 10  # Scale down for rate modification
+        
+        # Add sinusoidal disturbance
+        sinus_dist = cfg.sinus_amp * np.array([np.sin(0.8*t), 0.3*np.sin(1.1*t)])[:len(u_red)]
+        
+        return u_red + disturbance + sinus_dist
     
-    # Simulate
+    # Simulate with LLRQ control
     result = sim.simulate(t_eval, control_function)
-    result['method'] = 'Mass Action'
+    result['method'] = 'Mass Action (Corrected)'
     
-    # Add reduced state
+    # Add reduced state trajectory for comparison
     n = len(t_eval)
     Y = np.zeros((n, controller.rankS))
     for i in range(n):
         Y[i] = controller.reaction_quotients_to_reduced_state(result['reaction_quotients'][i])
     result['y'] = Y
+    
+    # Convert u_red to full control for plotting compatibility
+    if 'u_red' in result:
+        result['u'] = result['u_red']  # Just use reduced control for plotting
     
     return result
 
@@ -186,10 +206,25 @@ def build_and_run_comparison(out_dir: str = "llrq_linear_vs_mass_action"):
     """Compare linear LLRQ vs mass action simulation."""
     os.makedirs(out_dir, exist_ok=True)
     
-    # Build system
+    # Build system with thermodynamically consistent parameters
     network = _build_3cycle_network()
-    Keq = np.array([2.0, 0.5, 0.9])
-    dynamics = LLRQDynamics(network=network, equilibrium_constants=Keq)
+    
+    # Use thermodynamically consistent Keq values (must satisfy Keq1 × Keq2 × Keq3 = 1)
+    Keq = np.array([2.0, 0.5, 1.0])  # 2.0 × 0.5 × 1.0 = 1.0 ✓
+    
+    # Define consistent rate constants
+    rate_constants = {
+        'R1': (3.0, 1.5),  # Keq = 2.0
+        'R2': (1.0, 2.0),  # Keq = 0.5
+        'R3': (3.0, 3.0)   # Keq = 1.0
+    }
+    
+    # Proper K matrix (diagonal approximation: K[i,i] = kf[i] + kr[i])
+    kf = np.array([rate_constants[rid][0] for rid in network.reaction_ids])
+    kr = np.array([rate_constants[rid][1] for rid in network.reaction_ids])
+    K = np.diag(kf + kr)
+    
+    dynamics = LLRQDynamics(network=network, equilibrium_constants=Keq, relaxation_matrix=K)
     solver = LLRQSolver(dynamics)
     
     # Controller
@@ -202,6 +237,9 @@ def build_and_run_comparison(out_dir: str = "llrq_linear_vs_mass_action"):
     
     # Time points
     t_eval = np.linspace(0, cfg.T, cfg.npoints)
+    
+    # Pass rate constants to config for consistency
+    cfg.rate_constants = rate_constants
     
     # Run both simulations
     print("Running linear LLRQ simulation...")
