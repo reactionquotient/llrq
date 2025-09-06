@@ -264,9 +264,9 @@ def build_and_run_comparison(out_dir: str = "llrq_linear_vs_mass_action"):
     # Use proper mass action algorithm to compute K matrix
     dynamics = LLRQDynamics.from_mass_action(
         network=network,
-        equilibrium_point=c_star,
         forward_rates=kf,
         backward_rates=kr,
+        initial_concentrations=c_star,
         mode='equilibrium',
         reduce_basis=False  # Keep full dimension for controller compatibility
     )

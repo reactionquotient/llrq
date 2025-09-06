@@ -55,9 +55,9 @@ def example_enzymatic_reaction():
     try:
         dynamics_eq = LLRQDynamics.from_mass_action(
             network=network,
-            equilibrium_point=c_star,
             forward_rates=k_plus,
             backward_rates=k_minus,
+            initial_concentrations=c_star,
             mode='equilibrium',
             reduce_basis=True,
             enforce_symmetry=True
@@ -84,9 +84,9 @@ def example_enzymatic_reaction():
     try:
         dynamics_neq = LLRQDynamics.from_mass_action(
             network=network,
-            equilibrium_point=c_star,
             forward_rates=k_plus,
             backward_rates=k_minus,
+            initial_concentrations=c_star,
             mode='nonequilibrium',
             reduce_basis=True
         )
@@ -146,9 +146,9 @@ def example_metabolic_pathway():
     
     dynamics = LLRQDynamics.from_mass_action(
         network=network,
-        equilibrium_point=c_star,
         forward_rates=k_plus,
         backward_rates=k_minus,
+        initial_concentrations=c_star,
         mode='equilibrium',
         external_drive=metabolic_drive,
         reduce_basis=False,  # Keep full dimension for this example
@@ -276,9 +276,9 @@ def example_oscillatory_network():
         try:
             dynamics = LLRQDynamics.from_mass_action(
                 network=network,
-                equilibrium_point=c_star,
                 forward_rates=k_plus,
                 backward_rates=k_minus,
+                initial_concentrations=c_star,
                 mode=mode,
                 reduce_basis=True
             )
