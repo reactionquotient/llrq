@@ -1,0 +1,99 @@
+<!-- Custom head content for LLRQ documentation -->
+
+<!-- MathJax for mathematical equations -->
+<script type="text/javascript" async
+  src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js">
+</script>
+<script type="text/javascript">
+  window.MathJax = {
+    tex: {
+      inlineMath: [['$', '$'], ['\\(', '\\)']],
+      displayMath: [['$$', '$$'], ['\\[', '\\]']],
+      processEscapes: true,
+      processEnvironments: true
+    },
+    options: {
+      skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre']
+    }
+  };
+</script>
+
+<!-- Syntax highlighting for code blocks -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.7.0/build/styles/github.min.css">
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.7.0/build/highlight.min.js"></script>
+<script>hljs.highlightAll();</script>
+
+<!-- Custom CSS for better formatting -->
+<style>
+  .highlight pre {
+    background-color: #f8f8f8;
+    border: 1px solid #e1e4e8;
+    border-radius: 6px;
+    padding: 16px;
+    margin: 16px 0;
+    overflow: auto;
+    font-size: 14px;
+    line-height: 1.45;
+  }
+  
+  .interactive-demo {
+    background-color: #f9f9f9;
+    border-left: 4px solid #0066cc;
+    padding: 20px;
+    margin: 20px 0;
+    border-radius: 4px;
+  }
+  
+  .math-equation {
+    background-color: #f0f4f8;
+    border-radius: 4px;
+    padding: 10px;
+    margin: 10px 0;
+    text-align: center;
+  }
+  
+  .api-method {
+    background-color: #f8f8fa;
+    border: 1px solid #e1e4e8;
+    border-radius: 6px;
+    padding: 16px;
+    margin: 16px 0;
+  }
+  
+  .api-method h4 {
+    margin-top: 0;
+    color: #0366d6;
+  }
+  
+  .parameter {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 13px;
+    background-color: rgba(27,31,35,0.05);
+    padding: 2px 4px;
+    border-radius: 3px;
+  }
+  
+  .note {
+    background-color: #fff3cd;
+    border: 1px solid #ffeaa7;
+    border-radius: 4px;
+    padding: 12px;
+    margin: 16px 0;
+  }
+  
+  .warning {
+    background-color: #f8d7da;
+    border: 1px solid #f5c6cb;
+    border-radius: 4px;
+    padding: 12px;
+    margin: 16px 0;
+  }
+  
+  .tip {
+    background-color: #d1ecf1;
+    border: 1px solid #b8daff;
+    border-radius: 4px;
+    padding: 12px;
+    margin: 16px 0;
+  }
+</style>

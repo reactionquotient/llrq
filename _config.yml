@@ -1,0 +1,45 @@
+title: "LLRQ - Log-Linear Reaction Quotient Dynamics"
+description: "A Python package for analyzing chemical reaction networks using log-linear reaction quotient dynamics"
+url: "https://yourusername.github.io"  # Update with your GitHub username
+baseurl: "/llrq"
+
+# Build settings
+markdown: kramdown
+highlighter: rouge
+theme: minima
+
+# Navigation
+header_pages:
+  - index.md
+  - getting-started.md
+  - api-reference.md
+  - tutorials.md
+  - theory.md
+  - examples.md
+
+# Collections for better organization
+collections:
+  tutorials:
+    output: true
+    permalink: /:collection/:name/
+  api:
+    output: true
+    permalink: /:collection/:name/
+
+# Plugins
+plugins:
+  - jekyll-feed
+  - jekyll-sitemap
+  - jekyll-seo-tag
+
+# SEO
+author: Steven Diamond
+social:
+  name: Steven Diamond
+  links:
+    - https://arxiv.org/pdf/2508.18523
+
+# Math support
+kramdown:
+  math_engine: mathjax
+  syntax_highlighter: rouge

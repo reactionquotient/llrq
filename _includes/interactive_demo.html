@@ -1,0 +1,271 @@
+<!-- Interactive LLRQ Demo -->
+<div id="llrq-demo" style="border: 1px solid #ddd; padding: 20px; margin: 20px 0; border-radius: 5px;">
+    <h3>Interactive LLRQ Demo: A ⇌ B Reaction</h3>
+    
+    <div style="display: flex; flex-wrap: wrap; gap: 20px; margin-bottom: 20px;">
+        <div style="flex: 1; min-width: 200px;">
+            <h4>Parameters</h4>
+            <label for="keq-slider">Equilibrium Constant (K<sub>eq</sub>):</label>
+            <input type="range" id="keq-slider" min="0.1" max="5.0" step="0.1" value="2.0">
+            <span id="keq-value">2.0</span>
+            
+            <br><br>
+            <label for="k-slider">Relaxation Rate (k):</label>
+            <input type="range" id="k-slider" min="0.1" max="3.0" step="0.1" value="1.0">
+            <span id="k-value">1.0</span>
+            
+            <br><br>
+            <label for="a0-slider">Initial [A]:</label>
+            <input type="range" id="a0-slider" min="0.1" max="2.0" step="0.1" value="1.0">
+            <span id="a0-value">1.0</span>
+            
+            <br><br>
+            <label for="b0-slider">Initial [B]:</label>
+            <input type="range" id="b0-slider" min="0.0" max="1.0" step="0.05" value="0.1">
+            <span id="b0-value">0.1</span>
+            
+            <br><br>
+            <label for="drive-slider">External Drive (u):</label>
+            <input type="range" id="drive-slider" min="-1.0" max="1.0" step="0.1" value="0.0">
+            <span id="drive-value">0.0</span>
+        </div>
+        
+        <div style="flex: 2; min-width: 400px;">
+            <canvas id="demo-canvas" width="500" height="300" style="border: 1px solid #ccc;"></canvas>
+        </div>
+    </div>
+    
+    <div style="margin-top: 10px;">
+        <strong>Key Equation:</strong> d/dt ln Q = -k ln(Q/K<sub>eq</sub>) + u
+        <br>
+        <strong>Current Q:</strong> <span id="current-q">0.10</span> (equilibrium: <span id="eq-q">2.00</span>)
+        <br>
+        <strong>Log Deviation:</strong> ln(Q/K<sub>eq</sub>) = <span id="log-dev">-3.00</span>
+    </div>
+    
+    <button onclick="resetDemo()" style="margin-top: 10px; padding: 5px 15px;">Reset</button>
+    <button onclick="toggleAnimation()" id="play-button" style="margin-top: 10px; padding: 5px 15px;">Play</button>
+</div>
+
+<script>
+// Interactive LLRQ Demo Implementation
+(function() {
+    const canvas = document.getElementById('demo-canvas');
+    const ctx = canvas.getContext('2d');
+    
+    let animationId = null;
+    let isPlaying = false;
+    let currentTime = 0;
+    let timeStep = 0.05;
+    let maxTime = 5;
+    
+    // Parameters
+    let params = {
+        Keq: 2.0,
+        k: 1.0,
+        A0: 1.0,
+        B0: 0.1,
+        drive: 0.0
+    };
+    
+    // Update parameter displays
+    function updateParams() {
+        params.Keq = parseFloat(document.getElementById('keq-slider').value);
+        params.k = parseFloat(document.getElementById('k-slider').value);
+        params.A0 = parseFloat(document.getElementById('a0-slider').value);
+        params.B0 = parseFloat(document.getElementById('b0-slider').value);
+        params.drive = parseFloat(document.getElementById('drive-slider').value);
+        
+        document.getElementById('keq-value').textContent = params.Keq.toFixed(1);
+        document.getElementById('k-value').textContent = params.k.toFixed(1);
+        document.getElementById('a0-value').textContent = params.A0.toFixed(1);
+        document.getElementById('b0-value').textContent = params.B0.toFixed(2);
+        document.getElementById('drive-value').textContent = params.drive.toFixed(1);
+        
+        document.getElementById('eq-q').textContent = params.Keq.toFixed(2);
+        
+        // Reset animation when parameters change
+        currentTime = 0;
+        drawPlot();
+    }
+    
+    // LLRQ analytical solution
+    function solveLLRQ(t) {
+        const Q0 = params.B0 / params.A0;
+        const x0 = Math.log(Q0 / params.Keq);
+        const u = params.drive;
+        const k = params.k;
+        
+        // Analytical solution: x(t) = (x0 - u/k) * exp(-kt) + u/k
+        const x_t = (x0 - u/k) * Math.exp(-k * t) + u/k;
+        const Q_t = params.Keq * Math.exp(x_t);
+        
+        // Convert back to concentrations (assuming total mass conservation)
+        const total = params.A0 + params.B0;
+        const B_t = (Q_t * total) / (1 + Q_t);
+        const A_t = total - B_t;
+        
+        return { A: A_t, B: B_t, Q: Q_t, x: x_t };
+    }
+    
+    // Draw the plot
+    function drawPlot() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // Setup
+        const width = canvas.width - 80;
+        const height = canvas.height - 60;
+        const offsetX = 50;
+        const offsetY = 30;
+        
+        // Time points
+        const numPoints = 100;
+        const times = Array.from({length: numPoints}, (_, i) => (i / (numPoints - 1)) * maxTime);
+        
+        // Compute solutions
+        const solutions = times.map(t => solveLLRQ(t));
+        
+        // Find ranges for scaling
+        const A_vals = solutions.map(s => s.A);
+        const B_vals = solutions.map(s => s.B);
+        const maxConc = Math.max(...A_vals, ...B_vals);
+        const minConc = Math.min(...A_vals, ...B_vals);
+        const concRange = maxConc - minConc;
+        
+        // Draw axes
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(offsetX, offsetY);
+        ctx.lineTo(offsetX, offsetY + height);
+        ctx.lineTo(offsetX + width, offsetY + height);
+        ctx.stroke();
+        
+        // Draw grid
+        ctx.strokeStyle = '#ddd';
+        ctx.lineWidth = 0.5;
+        for (let i = 1; i < 5; i++) {
+            const y = offsetY + (i * height / 5);
+            ctx.beginPath();
+            ctx.moveTo(offsetX, y);
+            ctx.lineTo(offsetX + width, y);
+            ctx.stroke();
+        }
+        
+        for (let i = 1; i < 5; i++) {
+            const x = offsetX + (i * width / 5);
+            ctx.beginPath();
+            ctx.moveTo(x, offsetY);
+            ctx.lineTo(x, offsetY + height);
+            ctx.stroke();
+        }
+        
+        // Draw concentration curves
+        function drawCurve(values, color, label) {
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            
+            for (let i = 0; i < values.length; i++) {
+                const x = offsetX + (i / (values.length - 1)) * width;
+                const y = offsetY + height - ((values[i] - minConc) / concRange) * height;
+                
+                if (i === 0) {
+                    ctx.moveTo(x, y);
+                } else {
+                    ctx.lineTo(x, y);
+                }
+            }
+            ctx.stroke();
+            
+            // Legend
+            ctx.fillStyle = color;
+            ctx.font = '14px Arial';
+            ctx.fillText(label, offsetX + width - 80, offsetY + 20 + Object.keys({A: 0, B: 1})[label] * 20);
+        }
+        
+        drawCurve(A_vals, '#0066cc', 'A');
+        drawCurve(B_vals, '#cc0000', 'B');
+        
+        // Draw current time marker if animating
+        if (isPlaying && currentTime <= maxTime) {
+            const currentSol = solveLLRQ(currentTime);
+            const x = offsetX + (currentTime / maxTime) * width;
+            
+            // Vertical line
+            ctx.strokeStyle = '#00cc00';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(x, offsetY);
+            ctx.lineTo(x, offsetY + height);
+            ctx.stroke();
+            
+            // Update current values display
+            document.getElementById('current-q').textContent = currentSol.Q.toFixed(2);
+            document.getElementById('log-dev').textContent = currentSol.x.toFixed(2);
+        }
+        
+        // Labels
+        ctx.fillStyle = '#000';
+        ctx.font = '12px Arial';
+        ctx.fillText('Time', offsetX + width/2, offsetY + height + 30);
+        ctx.save();
+        ctx.rotate(-Math.PI/2);
+        ctx.fillText('Concentration', -(offsetY + height/2), 15);
+        ctx.restore();
+        
+        // Title
+        ctx.font = '14px Arial';
+        ctx.fillText('LLRQ Dynamics: A ⇌ B', offsetX, offsetY - 10);
+    }
+    
+    // Animation loop
+    function animate() {
+        if (currentTime <= maxTime) {
+            drawPlot();
+            currentTime += timeStep;
+            animationId = requestAnimationFrame(animate);
+        } else {
+            isPlaying = false;
+            document.getElementById('play-button').textContent = 'Play';
+        }
+    }
+    
+    // Control functions
+    window.toggleAnimation = function() {
+        if (isPlaying) {
+            cancelAnimationFrame(animationId);
+            isPlaying = false;
+            document.getElementById('play-button').textContent = 'Play';
+        } else {
+            isPlaying = true;
+            document.getElementById('play-button').textContent = 'Pause';
+            animate();
+        }
+    };
+    
+    window.resetDemo = function() {
+        cancelAnimationFrame(animationId);
+        isPlaying = false;
+        currentTime = 0;
+        document.getElementById('play-button').textContent = 'Play';
+        drawPlot();
+        
+        // Reset to initial state
+        const sol0 = solveLLRQ(0);
+        document.getElementById('current-q').textContent = sol0.Q.toFixed(2);
+        document.getElementById('log-dev').textContent = sol0.x.toFixed(2);
+    };
+    
+    // Event listeners
+    document.getElementById('keq-slider').addEventListener('input', updateParams);
+    document.getElementById('k-slider').addEventListener('input', updateParams);
+    document.getElementById('a0-slider').addEventListener('input', updateParams);
+    document.getElementById('b0-slider').addEventListener('input', updateParams);
+    document.getElementById('drive-slider').addEventListener('input', updateParams);
+    
+    // Initialize
+    updateParams();
+    resetDemo();
+})();
+</script>
