@@ -164,13 +164,17 @@ class TestReactionNetworkDynamics:
         # Wrong number of species
         with pytest.raises(ValueError, match="Expected 2 initial concentrations"):
             network.compute_dynamics_matrix(
-                forward_rates=k_plus, backward_rates=k_minus, initial_concentrations=[1.0]  # Should be 2
+                forward_rates=k_plus,
+                backward_rates=k_minus,
+                initial_concentrations=[1.0],  # Should be 2
             )
 
         # Wrong number of forward rates
         with pytest.raises(ValueError, match="Expected 1 forward rates"):
             network.compute_dynamics_matrix(
-                forward_rates=[1.0, 2.0], backward_rates=k_minus, initial_concentrations=c_star  # Should be 1
+                forward_rates=[1.0, 2.0],
+                backward_rates=k_minus,
+                initial_concentrations=c_star,  # Should be 1
             )
 
         # Invalid mode

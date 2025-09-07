@@ -323,7 +323,6 @@ class LLRQSolver:
 
         # For simplest case: A ⇌ B with Q = [B]/[A]
         if len(reactants) == 1 and len(products) == 1 and list(reactants.values())[0] == 1 and list(products.values())[0] == 1:
-
             reactant_id = list(reactants.keys())[0]
             product_id = list(products.keys())[0]
 

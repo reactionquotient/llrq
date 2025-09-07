@@ -208,7 +208,9 @@ class TestInvalidInputs:
         # Wrong number of forward rates
         with pytest.raises(ValueError):
             network.compute_dynamics_matrix(
-                forward_rates=[1.0, 2.0], backward_rates=[1.0], initial_concentrations=[1.0, 2.0]  # Should be 1
+                forward_rates=[1.0, 2.0],
+                backward_rates=[1.0],
+                initial_concentrations=[1.0, 2.0],  # Should be 1
             )
 
     def test_empty_arrays(self):

@@ -108,7 +108,9 @@ class TestMassActionDynamics:
         # Wrong number of species
         with pytest.raises(ValueError, match="Expected 2 initial concentrations"):
             network.compute_dynamics_matrix(
-                forward_rates=k_plus, backward_rates=k_minus, initial_concentrations=[1.0]  # Should be 2
+                forward_rates=k_plus,
+                backward_rates=k_minus,
+                initial_concentrations=[1.0],  # Should be 2
             )
 
     def test_equilibrium_condition(self):

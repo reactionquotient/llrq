@@ -199,7 +199,9 @@ class TestComplexNetworks:
     def test_cyclic_network(self):
         """Test cyclic network: A → B → C → A."""
         network = ReactionNetwork(
-            ["A", "B", "C"], ["R1", "R2", "R3"], np.array([[-1, 0, 1], [1, -1, 0], [0, 1, -1]])  # A  # B  # C
+            ["A", "B", "C"],
+            ["R1", "R2", "R3"],
+            np.array([[-1, 0, 1], [1, -1, 0], [0, 1, -1]]),  # A  # B  # C
         )
 
         c_star = np.array([1.0, 1.0, 1.0])
@@ -226,7 +228,9 @@ class TestComplexNetworks:
         """Test coupled reactions with multiple conservation laws."""
         # Two separate subsystems: A ⇌ B and C ⇌ D
         network = ReactionNetwork(
-            ["A", "B", "C", "D"], ["R1", "R2"], np.array([[-1, 0], [1, 0], [0, -1], [0, 1]])  # A  # B  # C  # D
+            ["A", "B", "C", "D"],
+            ["R1", "R2"],
+            np.array([[-1, 0], [1, 0], [0, -1], [0, 1]]),  # A  # B  # C  # D
         )
 
         # Two separate equilibria

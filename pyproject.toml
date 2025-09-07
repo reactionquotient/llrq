@@ -46,21 +46,24 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[tool.black]
+[tool.ruff]
 line-length = 127
-target-version = ['py38']
+target-version = "py38"
 
-[tool.isort]
-profile = "black"
-line_length = 127
+[tool.ruff.lint]
+# Enable the same critical error codes that flake8 was checking
+select = ["E9", "F63", "F7", "F82"]
+
+[tool.ruff.format]
+# Use double quotes, indent with spaces
+quote-style = "double"
+indent-style = "space"
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
-    "black>=22.0",
-    "isort>=5.0",
-    "flake8>=5.0",
+    "ruff>=0.6.0",
     "mypy>=1.0",
     "pre-commit>=3.0.0",
 ]

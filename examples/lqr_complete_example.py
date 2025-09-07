@@ -111,7 +111,11 @@ def main():
     # Create LQR controller WITHOUT integral action for stability
     # (integral action can cause numerical issues with some systems)
     controller = LQRController(
-        solver=solver, controlled_reactions=controlled_reactions, Q=Q, R=R, integral=False  # Disable integral action for now
+        solver=solver,
+        controlled_reactions=controlled_reactions,
+        Q=Q,
+        R=R,
+        integral=False,  # Disable integral action for now
     )
 
     # Define reference in reduced coordinates (track equilibrium)

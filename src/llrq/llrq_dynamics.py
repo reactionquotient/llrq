@@ -444,7 +444,7 @@ class LLRQDynamics:
             Dictionary with mass action parameters and matrices,
             or None if not created from mass action
         """
-        if not hasattr(self, "_mass_action_data"):
+        if not hasattr(self, "_mass_action_data") or self._mass_action_data is None:
             return None
 
         return {
