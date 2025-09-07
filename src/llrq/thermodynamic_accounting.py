@@ -292,3 +292,206 @@ class ThermodynamicAccountant:
         result = self.network.compute_onsager_conductance(concentrations, forward_rates, backward_rates, mode=mode)
         self.L = result["L"]
         return self.L
+
+    # =============================================================================
+    # Frequency-Domain Entropy Calculations
+    # =============================================================================
+
+    @staticmethod
+    def _freqs(N: int, dt: float) -> np.ndarray:
+        """Angular frequencies matching np.fft.fft bins (two-sided)."""
+        return 2 * np.pi * np.fft.fftfreq(N, d=dt)
+
+    def entropy_from_x_freq(
+        self, x_t: np.ndarray, dt: float, L: Optional[np.ndarray] = None, scale: float = 1.0
+    ) -> tuple[float, np.ndarray]:
+        """Approximate Σ_x = ∫ x(t)^T L x(t) dt using FFT (two-sided sum).
+
+        Based on Parseval's theorem, the time-domain integral equals the frequency-domain
+        spectral sum: ∫ x^T L x dt = (1/2π) ∫ X(ω)^H L X(ω) dω
+
+        Args:
+            x_t: Time series trajectories (N, m) where N is time points, m is reactions
+            dt: Time step size
+            L: Onsager conductance matrix (m, m). If None, uses self.L
+            scale: Scale factor (e.g., k_B*T for physical units)
+
+        Returns:
+            Tuple of (Sigma_total, per_bin_contrib) where per_bin_contrib has shape (N,)
+        """
+        if L is None:
+            if self.L is None:
+                raise ValueError("No Onsager conductance matrix available. Provide L or set during initialization.")
+            L = self.L
+
+        N, m = x_t.shape
+        X = np.fft.fft(x_t, axis=0)  # (N, m) - FFT along time axis
+
+        # Symmetrize L to ensure positive semidefinite
+        Ls = 0.5 * (L + L.T)
+
+        # Per-bin quadratic: X_k^H L X_k for each frequency bin k
+        quad = np.einsum("ki,ij,kj->k", np.conj(X), Ls, X, optimize=True)
+
+        # Total entropy using correct DFT Parseval relation
+        # For DFT: ∫ x^T L x dt ≈ (dt/N) Σ X[k]^H L X[k]
+        Sigma = (quad.real).sum() * dt / N
+
+        return float(scale * Sigma), scale * quad.real * dt / N
+
+    def entropy_from_u_freq(
+        self, u_t: np.ndarray, dt: float, K: np.ndarray, L: Optional[np.ndarray] = None, scale: float = 1.0
+    ) -> tuple[float, np.ndarray]:
+        """Approximate Σ_u = (1/2π) ∫ U(ω)^H G(ω)^H L G(ω) U(ω) dω via FFT sum.
+
+        This computes entropy production from control inputs using the frequency-domain
+        entropy kernel H_u(ω) = G(iω)^H L G(iω) where G(iω) = (K + iωI)^{-1}.
+
+        Args:
+            u_t: Control input time series (N, m)
+            dt: Time step size
+            K: Relaxation matrix (m, m) from ẋ = -Kx + u
+            L: Onsager conductance matrix (m, m). If None, uses self.L
+            scale: Scale factor
+
+        Returns:
+            Tuple of (Sigma_total, per_bin_contrib) where per_bin_contrib has shape (N,)
+        """
+        if L is None:
+            if self.L is None:
+                raise ValueError("No Onsager conductance matrix available. Provide L or set during initialization.")
+            L = self.L
+
+        N, m = u_t.shape
+        U = np.fft.fft(u_t, axis=0)  # (N, m)
+        w = self._freqs(N, dt)  # (N,)
+
+        Sigma_bins = np.empty(N, dtype=float)
+
+        for k, wk in enumerate(w):
+            # Compute transfer function G(iω) = (K + iωI)^{-1}
+            G = np.linalg.inv(K + 1j * wk * np.eye(m))  # (m, m)
+
+            # Entropy kernel H_u(ω) = G^H L G
+            Hu = np.conj(G.T) @ L @ G  # (m, m)
+
+            # Per-bin contribution: U_k^H H_u(ω_k) U_k
+            Sigma_bins[k] = np.real(np.conj(U[k]).T @ Hu @ U[k])
+
+        # Total entropy via discrete frequency sum
+        Sigma = Sigma_bins.sum() * dt / N
+
+        return float(scale * Sigma), scale * Sigma_bins * dt / N
+
+    def map_xref_to_u(self, Xref: np.ndarray, dt: float, K: np.ndarray) -> np.ndarray:
+        """Given desired state spectrum Xref[k] (FFT grid), return required control spectrum.
+
+        For each frequency bin: U[k] = (K + i ω_k I) Xref[k]
+        This inverts the transfer function to find the control needed for a target state spectrum.
+
+        Args:
+            Xref: Desired state spectrum on FFT bins (N, m) complex array
+            dt: Time step size
+            K: Relaxation matrix (m, m)
+
+        Returns:
+            Required control spectrum U of same shape as Xref
+        """
+        N, m = Xref.shape
+        w = self._freqs(N, dt)
+        U = np.empty_like(Xref)
+
+        for k, wk in enumerate(w):
+            # U[k] = (K + i ω_k I) Xref[k]
+            U[k] = (K + 1j * wk * np.eye(m)) @ Xref[k]
+
+        return U
+
+    def compute_entropy_spectrum(
+        self, u_t: np.ndarray, dt: float, K: np.ndarray, L: Optional[np.ndarray] = None
+    ) -> Dict[str, np.ndarray]:
+        """Compute detailed entropy spectrum analysis.
+
+        Args:
+            u_t: Control input time series (N, m)
+            dt: Time step size
+            K: Relaxation matrix (m, m)
+            L: Onsager conductance matrix (m, m). If None, uses self.L
+
+        Returns:
+            Dictionary containing:
+            - frequencies: Angular frequencies (N,)
+            - entropy_spectrum: Per-frequency entropy contributions (N,)
+            - entropy_kernel_trace: Trace of H_u(ω) at each frequency (N,)
+            - control_spectrum_power: ||U(ω)||² at each frequency (N,)
+        """
+        if L is None:
+            if self.L is None:
+                raise ValueError("No Onsager conductance matrix available.")
+            L = self.L
+
+        N, m = u_t.shape
+        U = np.fft.fft(u_t, axis=0)
+        frequencies = self._freqs(N, dt)
+
+        entropy_spectrum = np.empty(N)
+        entropy_kernel_trace = np.empty(N)
+        control_spectrum_power = np.empty(N)
+
+        for k, wk in enumerate(frequencies):
+            # Transfer function
+            G = np.linalg.inv(K + 1j * wk * np.eye(m))
+
+            # Entropy kernel
+            Hu = np.conj(G.T) @ L @ G
+
+            # Spectral quantities
+            entropy_spectrum[k] = np.real(np.conj(U[k]).T @ Hu @ U[k])
+            entropy_kernel_trace[k] = np.real(np.trace(Hu))
+            control_spectrum_power[k] = np.real(np.conj(U[k]).T @ U[k])
+
+        return {
+            "frequencies": frequencies,
+            "entropy_spectrum": entropy_spectrum / (N * dt),  # Normalize like other methods
+            "entropy_kernel_trace": entropy_kernel_trace,
+            "control_spectrum_power": control_spectrum_power,
+        }
+
+    def validate_parseval_entropy(
+        self, x_t: np.ndarray, dt: float, L: Optional[np.ndarray] = None, scale: float = 1.0
+    ) -> Dict[str, float]:
+        """Validate Parseval's theorem for entropy: time-domain vs frequency-domain should match.
+
+        Args:
+            x_t: State time series (N, m)
+            dt: Time step size
+            L: Onsager conductance matrix (m, m). If None, uses self.L
+            scale: Scale factor
+
+        Returns:
+            Dictionary with 'time_domain', 'frequency_domain', and 'relative_error' keys
+        """
+        if L is None:
+            if self.L is None:
+                raise ValueError("No Onsager conductance matrix available.")
+            L = self.L
+
+        # Time-domain calculation
+        t = np.arange(len(x_t)) * dt
+        time_result = self.entropy_from_x(t, x_t, L, scale)
+        time_domain_entropy = time_result.sigma_total
+
+        # Frequency-domain calculation
+        freq_domain_entropy, _ = self.entropy_from_x_freq(x_t, dt, L, scale)
+
+        # Relative error
+        if abs(time_domain_entropy) > 1e-12:
+            relative_error = abs(freq_domain_entropy - time_domain_entropy) / abs(time_domain_entropy)
+        else:
+            relative_error = abs(freq_domain_entropy - time_domain_entropy)
+
+        return {
+            "time_domain": float(time_domain_entropy),
+            "frequency_domain": float(freq_domain_entropy),
+            "relative_error": float(relative_error),
+        }

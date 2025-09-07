@@ -224,3 +224,201 @@ class FrequencySpaceController:
             phase[i, :, :] = np.angle(H, deg=True)
 
         return magnitude, phase
+
+    # =============================================================================
+    # Entropy-Aware Frequency Control
+    # =============================================================================
+
+    def compute_entropy_kernel(self, omega: float, L: np.ndarray) -> np.ndarray:
+        """Compute frequency-domain entropy kernel H_u(ω) = G(iω)^H L G(iω).
+
+        This kernel defines the entropy cost of control inputs in frequency domain:
+        σ_u(ω) = U(ω)^H H_u(ω) U(ω)
+
+        Args:
+            omega: Frequency in rad/s
+            L: Onsager conductance matrix (n_states x n_states)
+
+        Returns:
+            H_u: Entropy kernel matrix (n_controls x n_controls)
+        """
+        # Get frequency response G(iω) = (K + iωI)^{-1}B
+        G = self.compute_frequency_response(omega)
+
+        # Compute entropy kernel H_u(ω) = G^H L G
+        H_u = np.conj(G.T) @ L @ G
+
+        return H_u
+
+    def compute_sinusoidal_entropy_rate(self, U: np.ndarray, omega: float, L: np.ndarray) -> float:
+        """Compute time-averaged entropy production rate for sinusoidal control.
+
+        For u(t) = Re{U e^(iωt)}, the time-averaged entropy rate is:
+        σ̄ = (1/2) Re{U^H H_u(ω) U}
+
+        Args:
+            U: Complex control amplitude vector (n_controls,)
+            omega: Frequency in rad/s
+            L: Onsager conductance matrix (n_states x n_states)
+
+        Returns:
+            Time-averaged entropy production rate
+        """
+        H_u = self.compute_entropy_kernel(omega, L)
+        entropy_rate = 0.5 * np.real(np.conj(U).T @ H_u @ U)
+        return float(entropy_rate)
+
+    def design_entropy_aware_sinusoidal_control(
+        self, X_target: np.ndarray, omega: float, L: np.ndarray, entropy_weight: float = 1.0, W: Optional[np.ndarray] = None
+    ) -> dict:
+        """Design sinusoidal control with entropy-tracking tradeoff.
+
+        Solves the optimization problem:
+        min_U  ||H(iω)U - X*||²_W + λ * Re{U^H H_u(ω) U}
+
+        Where the entropy cost is the time-averaged production rate for sinusoidal signals.
+
+        Args:
+            X_target: Target complex state amplitude (n_states,)
+            omega: Frequency in rad/s
+            L: Onsager conductance matrix (n_states x n_states)
+            entropy_weight: Weight λ on entropy cost vs tracking error
+            W: State weighting matrix (n_states x n_states). If None, uses identity.
+
+        Returns:
+            Dictionary containing:
+            - U_optimal: Optimal complex control amplitude
+            - X_achieved: Achieved complex state amplitude
+            - tracking_error: Weighted tracking error
+            - entropy_rate: Time-averaged entropy production rate
+            - total_cost: Combined cost function value
+        """
+        if W is None:
+            W = np.eye(self.n_states)
+
+        # Get frequency response and entropy kernel
+        H = self.compute_frequency_response(omega)
+        H_u = self.compute_entropy_kernel(omega, L)
+
+        # Solve: (H^H W H + λ H_u) U = H^H W X*
+        # Note: For sinusoidal signals, entropy weight is applied to full H_u, not 0.5*H_u,
+        # because the optimization includes the (1/2) factor in the cost function
+        gram_matrix = np.conj(H.T) @ W @ H + entropy_weight * 0.5 * H_u  # Include the 1/2 factor
+        rhs = np.conj(H.T) @ W @ X_target
+
+        # Solve for optimal control
+        try:
+            U_optimal = np.linalg.solve(gram_matrix, rhs)
+        except np.linalg.LinAlgError:
+            U_optimal = np.linalg.pinv(gram_matrix) @ rhs
+
+        # Compute achieved state and performance metrics
+        X_achieved = H @ U_optimal
+        tracking_error = np.real(np.conj(X_achieved - X_target).T @ W @ (X_achieved - X_target))
+        entropy_rate = self.compute_sinusoidal_entropy_rate(U_optimal, omega, L)
+        total_cost = float(tracking_error + entropy_weight * entropy_rate)
+
+        return {
+            "U_optimal": U_optimal,
+            "X_achieved": X_achieved,
+            "tracking_error": float(tracking_error),
+            "entropy_rate": entropy_rate,
+            "total_cost": total_cost,
+            "entropy_weight": entropy_weight,
+            "omega": omega,
+        }
+
+    def analyze_frequency_entropy_tradeoff(
+        self,
+        X_target: np.ndarray,
+        omega_range: np.ndarray,
+        L: np.ndarray,
+        entropy_weights: np.ndarray,
+        W: Optional[np.ndarray] = None,
+    ) -> dict:
+        """Analyze entropy-tracking tradeoff across frequencies and entropy weights.
+
+        Args:
+            X_target: Target complex state amplitude (n_states,)
+            omega_range: Array of frequencies to analyze (nf,)
+            L: Onsager conductance matrix (n_states x n_states)
+            entropy_weights: Array of entropy weight parameters (nw,)
+            W: State weighting matrix. If None, uses identity.
+
+        Returns:
+            Dictionary containing analysis results with keys:
+            - omega_range, entropy_weights: Input parameter arrays
+            - tracking_errors: (nf x nw) array of tracking errors
+            - entropy_rates: (nf x nw) array of entropy production rates
+            - total_costs: (nf x nw) array of total costs
+            - control_amplitudes: (nf x nw) array of control effort ||U||
+        """
+        nf, nw = len(omega_range), len(entropy_weights)
+
+        # Initialize result arrays
+        tracking_errors = np.zeros((nf, nw))
+        entropy_rates = np.zeros((nf, nw))
+        total_costs = np.zeros((nf, nw))
+        control_amplitudes = np.zeros((nf, nw))
+
+        # Compute for each frequency and entropy weight combination
+        for i, omega in enumerate(omega_range):
+            for j, lam in enumerate(entropy_weights):
+                result = self.design_entropy_aware_sinusoidal_control(X_target, omega, L, entropy_weight=lam, W=W)
+
+                tracking_errors[i, j] = result["tracking_error"]
+                entropy_rates[i, j] = result["entropy_rate"]
+                total_costs[i, j] = result["total_cost"]
+                control_amplitudes[i, j] = np.linalg.norm(result["U_optimal"])
+
+        return {
+            "omega_range": omega_range,
+            "entropy_weights": entropy_weights,
+            "tracking_errors": tracking_errors,
+            "entropy_rates": entropy_rates,
+            "total_costs": total_costs,
+            "control_amplitudes": control_amplitudes,
+        }
+
+    def compute_entropy_kernel_spectrum(self, omega_range: np.ndarray, L: np.ndarray) -> dict:
+        """Compute entropy kernel properties across frequency range.
+
+        Args:
+            omega_range: Array of frequencies (nf,)
+            L: Onsager conductance matrix (n_states x n_states)
+
+        Returns:
+            Dictionary with frequency-dependent entropy kernel properties:
+            - frequencies: Input frequency array
+            - kernel_trace: Trace of H_u(ω) at each frequency
+            - kernel_determinant: Determinant of H_u(ω) at each frequency
+            - kernel_condition: Condition number of H_u(ω) at each frequency
+        """
+        nf = len(omega_range)
+
+        kernel_trace = np.zeros(nf)
+        kernel_determinant = np.zeros(nf)
+        kernel_condition = np.zeros(nf)
+
+        for i, omega in enumerate(omega_range):
+            H_u = self.compute_entropy_kernel(omega, L)
+
+            kernel_trace[i] = np.real(np.trace(H_u))
+            kernel_determinant[i] = np.real(np.linalg.det(H_u))
+
+            # Condition number (ratio of largest to smallest eigenvalue)
+            eigenvals = np.linalg.eigvals(H_u)
+            eigenvals_real = np.real(eigenvals)
+            eigenvals_positive = eigenvals_real[eigenvals_real > 1e-12]  # Remove near-zero eigenvals
+
+            if len(eigenvals_positive) > 0:
+                kernel_condition[i] = np.max(eigenvals_positive) / np.min(eigenvals_positive)
+            else:
+                kernel_condition[i] = np.inf
+
+        return {
+            "frequencies": omega_range,
+            "kernel_trace": kernel_trace,
+            "kernel_determinant": kernel_determinant,
+            "kernel_condition": kernel_condition,
+        }
