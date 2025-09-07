@@ -224,83 +224,102 @@ class LLRQController:
         return float(u.T @ M @ u)
 
     def compute_entropy_aware_steady_state_control(
-        self, x_target: np.ndarray, L: np.ndarray, entropy_weight: float = 1.0, controlled_reactions_only: bool = True
+        self,
+        x_target: np.ndarray,
+        L: np.ndarray,
+        entropy_weight: float = 1.0,
+        controlled_reactions_only: bool = True,
     ) -> Dict[str, Any]:
-        """Compute steady-state control that trades off target tracking vs entropy production.
-
-        Solves the optimization problem:
-        min_u  ||K^{-1}u - x_target||^2 + λ * u^T M u
-
-        where M = K^{-T} L K^{-1} is the control entropy metric matrix and λ is the entropy weight.
-
-        At steady state: 0 = -K*x + u, so x = K^{-1}u
-        The entropy cost in quasi-steady approximation is σ_u = u^T M u
-
-        Args:
-            x_target: Target reaction force state (r,)
-            L: Onsager conductance matrix (r x r)
-            entropy_weight: Weight λ on entropy cost relative to tracking error
-            controlled_reactions_only: If True, optimize only over controlled reactions
-
-        Returns:
-            Dictionary containing:
-            - u_optimal: Optimal control input
-            - x_achieved: Achieved steady state
-            - tracking_error: ||x_achieved - x_target||^2
-            - entropy_rate: Entropy production rate σ_u
-            - total_cost: Combined cost function value
         """
-        K = self.solver.dynamics.K
-        K_inv = np.linalg.inv(K)
+        Compute steady-state control that trades off target tracking vs entropy production,
+        without forming any explicit matrix inverses.
 
-        # Compute control entropy metric
-        M = self.compute_control_entropy_metric(L)
+        Original problem:
+            min_u  ||K^{-1} u - x_target||^2 + λ * u^T M u
+        with M = K^{-T} L K^{-1}.  At steady state: K x = u.
+
+        Strategy:
+        • If optimizing over all reactions, use u = K x:
+                min_x ||x - x_target||^2 + λ (Kx)^T M (Kx)
+            ⇒ (I + λ K^T M K) x = x_target, then u = K x.
+
+        • If optimizing over controlled reactions u = G u_c, avoid K^{-1} by
+            computing A_eff = solve(K, G) (i.e., K A_eff = G) and solving the
+            normal equations (A_eff^T A_eff + λ M_eff) u_c = A_eff^T x_target
+            where M_eff = G^T M G.
+        """
+        K: np.ndarray = self.solver.dynamics.K
+
+        # Control-entropy metric (implementation should avoid explicit inverses internally).
+        M: np.ndarray = self.compute_control_entropy_metric(L)
+        # Improve numerical symmetry
+        M = 0.5 * (M + M.T)
 
         if controlled_reactions_only:
-            # Project to controlled reactions only
-            # We solve: min_u_c ||K^{-1} G u_c - x_target||^2 + λ * (G u_c)^T M (G u_c)
-            # where G is the selection matrix for controlled reactions
+            # u = G u_c (optimize only controlled reactions)
+            G: np.ndarray = self.G  # (r x m), column selector for controlled reactions
 
-            G = self.G  # Selection matrix (r x m)
+            # A_eff ≡ K^{-1} G computed via solve(K, G) (no explicit inverse)
+            try:
+                A_eff = np.linalg.solve(K, G)  # (r x m)
+            except np.linalg.LinAlgError:
+                # Least-squares fallback if K is singular/ill-conditioned
+                A_eff, *_ = np.linalg.lstsq(K, G, rcond=None)
 
-            # Effective system matrices for controlled reactions
-            A_eff = K_inv @ G  # (r x m)
             M_eff = G.T @ M @ G  # (m x m)
 
-            # Solve: (A_eff^T A_eff + λ * M_eff) u_c = A_eff^T x_target
+            # Normal equations: (A_eff^T A_eff + λ M_eff) u_c = A_eff^T x_target
             H = A_eff.T @ A_eff + entropy_weight * M_eff
+            H = 0.5 * (H + H.T)  # symmetrize
             b = A_eff.T @ x_target
 
             try:
                 u_controlled = np.linalg.solve(H, b)
-                u_optimal = G @ u_controlled  # Map back to full space
             except np.linalg.LinAlgError:
-                # Fallback to pseudoinverse if system is singular
-                u_controlled = np.linalg.pinv(H) @ b
-                u_optimal = G @ u_controlled
+                # Gentle Tikhonov jitter + final lstsq fallback
+                jitter = 1e-9 * np.eye(H.shape[0], dtype=H.dtype)
+                try:
+                    u_controlled = np.linalg.solve(H + jitter, b)
+                except np.linalg.LinAlgError:
+                    u_controlled, *_ = np.linalg.lstsq(H, b, rcond=None)
+
+            u_optimal = G @ u_controlled
+
+            # Achieved steady state x from K x = u (avoid using A_eff again)
+            try:
+                x_achieved = np.linalg.solve(K, u_optimal)
+            except np.linalg.LinAlgError:
+                x_achieved, *_ = np.linalg.lstsq(K, u_optimal, rcond=None)
 
         else:
-            # Optimize over all reactions
-            # Solve: (K^{-T} K^{-1} + λ * M) u = K^{-T} x_target
-            H = K_inv.T @ K_inv + entropy_weight * M
-            b = K_inv.T @ x_target
+            # Optimize over all reactions via x-variable (u = K x)
+            I = np.eye(K.shape[0], dtype=K.dtype)
+            S = I + entropy_weight * (K.T @ M @ K)
+            S = 0.5 * (S + S.T)  # enforce symmetry for stability
 
+            # Solve for x directly; then u = K x
             try:
-                u_optimal = np.linalg.solve(H, b)
+                x_achieved = np.linalg.solve(S, x_target)
             except np.linalg.LinAlgError:
-                u_optimal = np.linalg.pinv(H) @ b
+                jitter = 1e-9 * np.eye(S.shape[0], dtype=S.dtype)
+                try:
+                    x_achieved = np.linalg.solve(S + jitter, x_target)
+                except np.linalg.LinAlgError:
+                    x_achieved, *_ = np.linalg.lstsq(S, x_target, rcond=None)
 
-        # Compute achieved steady state and performance metrics
-        x_achieved = K_inv @ u_optimal
+            u_optimal = K @ x_achieved
+
+        # Metrics
         tracking_error = float(np.linalg.norm(x_achieved - x_target) ** 2)
+        # Keep using your helper for consistency (it may include physical constants/scaling)
         entropy_rate = self.compute_steady_state_entropy_rate(u_optimal, M)
-        total_cost = tracking_error + entropy_weight * entropy_rate
+        total_cost = tracking_error + entropy_weight * float(entropy_rate)
 
         return {
             "u_optimal": u_optimal,
             "x_achieved": x_achieved,
             "tracking_error": tracking_error,
-            "entropy_rate": entropy_rate,
+            "entropy_rate": float(entropy_rate),
             "total_cost": total_cost,
             "entropy_weight": entropy_weight,
             "controlled_reactions_only": controlled_reactions_only,
