@@ -45,23 +45,19 @@ def example_1_simple_reaction():
 
     print(f"System: {network.summary()}")
 
-    # Extract system matrices (in reduced coordinates)
-    K_red = solver._B.T @ dynamics.K @ solver._B  # Reduced relaxation matrix
-    B_red = solver._B.T @ np.eye(len(network.reaction_ids))  # Reduced input matrix
+    # Create frequency controller using new API
+    freq_controller = FrequencySpaceController.from_llrq_solver(solver)
 
-    print(f"Reduced system dimensions: {K_red.shape[0]} states, {B_red.shape[1]} controls")
-    print(f"K_red = {K_red}")
-    print(f"B_red = {B_red}")
-
-    # Create frequency controller
-    freq_controller = FrequencySpaceController(K_red, B_red)
+    print(f"Reduced system dimensions: {freq_controller.n_states} states, {freq_controller.n_controls} controls")
+    print(f"K_red = {freq_controller.K}")
+    print(f"B_red = {freq_controller.B}")
 
     # Problem parameters (matching snippet.py)
     omega = 2.0  # frequency (rad/s)
     U_analytical = 0.6  # control amplitude from snippet.py
 
     # Compute analytical steady-state amplitude (from snippet.py formula)
-    k_scalar = K_red[0, 0]  # For scalar case, K_red is 1x1
+    k_scalar = freq_controller.K[0, 0]  # For scalar case, K_red is 1x1
     amp_analytical = U_analytical / np.hypot(k_scalar, omega)  # U / sqrt(k^2 + ω^2)
     phase_lag = np.arctan2(omega, k_scalar)  # atan2(ω, k)
 
@@ -233,21 +229,18 @@ def example_2_cycle_network():
     solver = llrq.LLRQSolver(dynamics)
     print(f"Reduced system dimensions: {solver._rankS}")
 
-    # Get reduced system matrices
-    K_red = solver._B.T @ dynamics.K @ solver._B
-    B_red = solver._B.T @ np.eye(len(network.reaction_ids))
+    # Create frequency controller using new API - control reactions R1 and R3
+    freq_controller = FrequencySpaceController.from_llrq_solver(solver, controlled_reactions=["R1", "R3"])
 
-    print(f"K_red shape: {K_red.shape}")
-    print(f"B_red shape: {B_red.shape}")
-
-    # Create frequency controller
-    freq_controller = FrequencySpaceController(K_red, B_red)
+    print(f"K_red shape: {freq_controller.K.shape}")
+    print(f"B_red shape: {freq_controller.B.shape}")
+    print(f"Controlling reactions: R1, R3")
 
     # Design oscillatory control
     omega = 1.5  # rad/s
 
     # Target: oscillations with specific amplitudes in each reduced state
-    n_reduced = K_red.shape[0]
+    n_reduced = freq_controller.K.shape[0]
     target_amplitudes = [0.3, 0.2][:n_reduced]  # Adjust based on actual dimensions
     target_phases = [0.0, np.pi / 4][:n_reduced]
 

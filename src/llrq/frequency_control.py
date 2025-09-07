@@ -46,6 +46,34 @@ class FrequencySpaceController:
 
             warnings.warn("K is not symmetric - this may indicate the system is not from LLRQ theory")
 
+    @classmethod
+    def from_llrq_solver(cls, solver, controlled_reactions=None):
+        """Create frequency controller from LLRQ solver.
+
+        This factory method creates a FrequencySpaceController using the reduced
+        system matrices from an LLRQSolver, with optional reaction selection.
+
+        Args:
+            solver: LLRQSolver instance with computed basis matrices
+            controlled_reactions: List of reaction IDs or indices to control.
+                                If None, controls all reactions.
+                                Can be strings (reaction IDs) or integers (indices).
+
+        Returns:
+            FrequencySpaceController instance configured for the specified reactions
+
+        Example:
+            # Control all reactions
+            freq_controller = FrequencySpaceController.from_llrq_solver(solver)
+
+            # Control specific reactions
+            freq_controller = FrequencySpaceController.from_llrq_solver(
+                solver, controlled_reactions=["R1", "R3"]
+            )
+        """
+        K_red, B_red = solver.get_reduced_system_matrices(controlled_reactions)
+        return cls(K_red, B_red)
+
     def compute_frequency_response(self, omega: float) -> np.ndarray:
         """Compute frequency response matrix H(iω) = (K + iωI)^(-1)B.
 

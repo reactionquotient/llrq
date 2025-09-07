@@ -733,3 +733,55 @@ class LLRQSolver:
         result["reduced_state"] = Y
 
         return result
+
+    def get_reduced_system_matrices(self, controlled_reactions=None):
+        """Get reduced system matrices for control design.
+
+        This method provides the reduced system matrices K_red and B_red needed
+        for frequency-domain control design. These matrices define the reduced
+        dynamics: dy/dt = -K_red * y + B_red * u, where y is the reduced state.
+
+        Args:
+            controlled_reactions: List of reaction IDs or indices to control.
+                                If None, returns matrices for controlling all reactions.
+                                Can be strings (reaction IDs) or integers (indices).
+
+        Returns:
+            tuple: (K_red, B_red) where:
+                - K_red: Reduced system matrix (rankS x rankS)
+                - B_red: Reduced input matrix (rankS x m) where m = len(controlled_reactions)
+
+        Example:
+            # Control all reactions
+            K_red, B_red = solver.get_reduced_system_matrices()
+
+            # Control specific reactions
+            K_red, B_red = solver.get_reduced_system_matrices(["R1", "R3"])
+        """
+        # Reduced system matrix (same regardless of which reactions controlled)
+        K_red = self._B.T @ self.dynamics.K @ self._B
+
+        if controlled_reactions is None:
+            # Control all reactions - B_red is just B^T
+            B_red = self._B.T
+        else:
+            # Build selection matrix G for specified reactions
+            r = len(self.network.reaction_ids)
+            m = len(controlled_reactions)
+            G = np.zeros((r, m))
+
+            for j, rid in enumerate(controlled_reactions):
+                if isinstance(rid, str):
+                    if rid not in self.network.reaction_to_idx:
+                        raise ValueError(f"Unknown reaction ID: {rid}")
+                    idx = self.network.reaction_to_idx[rid]
+                else:
+                    idx = int(rid)
+                    if idx < 0 or idx >= r:
+                        raise ValueError(f"Reaction index {idx} out of range [0, {r-1}]")
+                G[idx, j] = 1.0
+
+            # Reduced input matrix: B_red = B^T @ G
+            B_red = self._B.T @ G
+
+        return K_red, B_red

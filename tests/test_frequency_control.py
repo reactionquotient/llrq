@@ -321,3 +321,165 @@ def test_analytical_validation_simple_reaction(omega):
     # For scalar case with small regularization, should get exact solution
     U_analytical = X_target[0] / H_analytical
     assert np.allclose(U_opt[0], U_analytical, rtol=1e-6)
+
+
+class TestFrequencySpaceControllerIntegration:
+    """Test integration with LLRQSolver and reaction selection."""
+
+    def setup_method(self):
+        """Set up LLRQ system for testing."""
+        import llrq
+
+        # Create simple A ⇌ B system
+        self.network, self.dynamics, self.solver, _ = llrq.simple_reaction(
+            reactant_species="A",
+            product_species="B",
+            equilibrium_constant=2.0,
+            relaxation_rate=1.0,
+            initial_concentrations={"A": 1.0, "B": 0.1},
+        )
+
+        # Create 3-cycle network for multi-reaction tests
+        import numpy as np
+
+        species_ids = ["A", "B", "C"]
+        reaction_ids = ["R1", "R2", "R3"]
+
+        S = np.array(
+            [
+                [-1, 0, 1],  # A: -1 in R1, 0 in R2, +1 in R3
+                [1, -1, 0],  # B: +1 in R1, -1 in R2, 0 in R3
+                [0, 1, -1],  # C: 0 in R1, +1 in R2, -1 in R3
+            ]
+        )
+
+        species_info = {
+            "A": {"name": "A", "initial_concentration": 2.0, "compartment": "cell", "boundary_condition": False},
+            "B": {"name": "B", "initial_concentration": 0.2, "compartment": "cell", "boundary_condition": False},
+            "C": {"name": "C", "initial_concentration": 0.1, "compartment": "cell", "boundary_condition": False},
+        }
+
+        reaction_info = [
+            {"id": "R1", "name": "A ⇌ B", "reactants": [("A", 1.0)], "products": [("B", 1.0)], "reversible": True},
+            {"id": "R2", "name": "B ⇌ C", "reactants": [("B", 1.0)], "products": [("C", 1.0)], "reversible": True},
+            {"id": "R3", "name": "C ⇌ A", "reactants": [("C", 1.0)], "products": [("A", 1.0)], "reversible": True},
+        ]
+
+        self.network_3cycle = llrq.ReactionNetwork(species_ids, reaction_ids, S, species_info, reaction_info)
+
+        equilibrium_constants = np.array([2.0, 0.5, 1.0])  # Wegscheider: 2.0 * 0.5 * 1.0 = 1.0
+        relaxation_matrix = np.diag([2.0, 1.5, 2.5])
+
+        self.dynamics_3cycle = llrq.LLRQDynamics(
+            network=self.network_3cycle, equilibrium_constants=equilibrium_constants, relaxation_matrix=relaxation_matrix
+        )
+
+        self.solver_3cycle = llrq.LLRQSolver(self.dynamics_3cycle)
+
+    def test_from_llrq_solver_simple(self):
+        """Test factory method with simple reaction system."""
+        controller = FrequencySpaceController.from_llrq_solver(self.solver)
+
+        # Should have 1 state and 1 control (simple A ⇌ B)
+        assert controller.n_states == 1
+        assert controller.n_controls == 1
+
+        # Check matrices match manual computation
+        K_expected, B_expected = self.solver.get_reduced_system_matrices()
+        assert np.allclose(controller.K, K_expected)
+        assert np.allclose(controller.B, B_expected)
+
+    def test_from_llrq_solver_all_reactions(self):
+        """Test factory method controlling all reactions."""
+        controller = FrequencySpaceController.from_llrq_solver(self.solver_3cycle)
+
+        # Should have 2 states (rankS=2) and 3 controls (all reactions)
+        assert controller.n_states == 2
+        assert controller.n_controls == 3
+
+        # Check matrices
+        K_expected, B_expected = self.solver_3cycle.get_reduced_system_matrices()
+        assert np.allclose(controller.K, K_expected)
+        assert np.allclose(controller.B, B_expected)
+
+    def test_from_llrq_solver_selected_reactions(self):
+        """Test factory method with reaction selection."""
+        # Control reactions R1 and R3 (by ID)
+        controller = FrequencySpaceController.from_llrq_solver(self.solver_3cycle, controlled_reactions=["R1", "R3"])
+
+        # Should have 2 states and 2 controls
+        assert controller.n_states == 2
+        assert controller.n_controls == 2
+
+        # Check matrices match manual computation
+        K_expected, B_expected = self.solver_3cycle.get_reduced_system_matrices(["R1", "R3"])
+        assert np.allclose(controller.K, K_expected)
+        assert np.allclose(controller.B, B_expected)
+
+    def test_from_llrq_solver_selected_reactions_by_index(self):
+        """Test factory method with reaction selection by index."""
+        # Control reactions 0 and 2 (R1 and R3 by index)
+        controller = FrequencySpaceController.from_llrq_solver(self.solver_3cycle, controlled_reactions=[0, 2])
+
+        # Should have 2 states and 2 controls
+        assert controller.n_states == 2
+        assert controller.n_controls == 2
+
+        # Should match selection by ID
+        controller_by_id = FrequencySpaceController.from_llrq_solver(self.solver_3cycle, controlled_reactions=["R1", "R3"])
+
+        assert np.allclose(controller.K, controller_by_id.K)
+        assert np.allclose(controller.B, controller_by_id.B)
+
+    def test_get_reduced_system_matrices_validation(self):
+        """Test validation in get_reduced_system_matrices method."""
+        # Invalid reaction ID
+        with pytest.raises(ValueError, match="Unknown reaction ID"):
+            self.solver_3cycle.get_reduced_system_matrices(["R1", "R99"])
+
+        # Invalid reaction index
+        with pytest.raises(ValueError, match="Reaction index .* out of range"):
+            self.solver_3cycle.get_reduced_system_matrices([0, 5])
+
+        # Negative index
+        with pytest.raises(ValueError, match="Reaction index .* out of range"):
+            self.solver_3cycle.get_reduced_system_matrices([0, -1])
+
+    def test_frequency_control_with_reaction_selection(self):
+        """Test end-to-end frequency control with reaction selection."""
+        # Create controller controlling only R1
+        controller = FrequencySpaceController.from_llrq_solver(self.solver_3cycle, controlled_reactions=["R1"])
+
+        assert controller.n_controls == 1  # Only 1 reaction controlled
+
+        # Test frequency response computation
+        omega = 1.0
+        H = controller.compute_frequency_response(omega)
+        assert H.shape == (2, 1)  # 2 states, 1 control
+
+        # Test control design
+        X_target = np.array([0.1, 0.2j])
+        U_opt = controller.design_sinusoidal_control(X_target, omega, lam=0.01)
+        assert U_opt.shape == (1,)  # Only 1 control signal
+
+        # Test steady state evaluation
+        t = np.linspace(0, 5, 100)
+        x_ss, u_real = controller.evaluate_steady_state(U_opt, omega, t)
+        assert x_ss.shape == (100, 2)  # 2 states
+        assert u_real.shape == (100, 1)  # 1 control
+
+    def test_consistency_with_llrq_controller(self):
+        """Test that matrices match those from LLRQController."""
+        import llrq
+
+        # Create LLRQ controller for comparison
+        llrq_controller = llrq.LLRQController(self.solver_3cycle, controlled_reactions=["R1", "R3"])
+
+        # Create frequency controller with same reactions
+        freq_controller = FrequencySpaceController.from_llrq_solver(self.solver_3cycle, controlled_reactions=["R1", "R3"])
+
+        # K matrices should match
+        assert np.allclose(freq_controller.K, llrq_controller.K_red)
+
+        # B matrices should match
+        assert np.allclose(freq_controller.B, llrq_controller.B_red)
