@@ -786,6 +786,424 @@ class ReactionNetwork:
 
         return K_sym
 
+    def _compute_flux_parts(
+        self, concentrations: np.ndarray, forward_rates: np.ndarray, backward_rates: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Compute forward, reverse, and net fluxes for mass action kinetics.
+
+        Args:
+            concentrations: Species concentrations [species]
+            forward_rates: Forward rate constants k⁺ [reactions]
+            backward_rates: Backward rate constants k⁻ [reactions]
+
+        Returns:
+            Tuple of (forward_flux, reverse_flux, net_flux) arrays [reactions]
+        """
+        concentrations = np.asarray(concentrations)
+        forward_rates = np.asarray(forward_rates)
+        backward_rates = np.asarray(backward_rates)
+
+        # Safe logarithm to avoid log(0)
+        ln_c = np.log(np.maximum(concentrations, 1e-300))
+
+        # Get reactant and product stoichiometry matrices
+        A = self.get_reactant_stoichiometry_matrix()  # reactants (positive coeffs)
+        B = self.get_product_stoichiometry_matrix()  # products (positive coeffs)
+
+        # Forward flux: f_j = k_j⁺ * ∏(c_i^A_ij)
+        forward_flux = forward_rates * np.exp(A.T @ ln_c)
+
+        # Reverse flux: r_j = k_j⁻ * ∏(c_i^B_ij)
+        reverse_flux = backward_rates * np.exp(B.T @ ln_c)
+
+        # Net flux
+        net_flux = forward_flux - reverse_flux
+
+        return forward_flux, reverse_flux, net_flux
+
+    def compute_onsager_conductance(
+        self,
+        concentrations: np.ndarray,
+        forward_rates: np.ndarray,
+        backward_rates: np.ndarray,
+        mode: str = "auto",
+        equilibrium_tol: float = 1e-8,
+        enforce_reciprocity: bool = True,
+        clip_eigenvalues: float = 1e-12,
+    ) -> Dict[str, Any]:
+        """Compute Onsager conductance matrix L for thermodynamic accounting.
+
+        The Onsager conductance L maps reaction forces to fluxes in the linear regime:
+        J ≈ -L x, where x = S^T ln(c) - ln(K_eq) are reaction forces.
+
+        This implements the thermodynamic accounting framework for mass action networks,
+        providing the conductance matrix that characterizes linear response near
+        equilibrium or local linearization away from equilibrium.
+
+        Modes:
+        - "equilibrium": L = diag(v*) where v* ≈ 0.5(f + r) are equilibrium fluxes.
+                        Exact at detailed balance, best near equilibrium.
+        - "local": Local linearization L = -A @ pinv(S^T) where A = ∂J/∂(ln c).
+                  Valid for general non-equilibrium states.
+        - "auto": Automatically choose based on proximity to equilibrium.
+
+        Args:
+            concentrations: Current species concentrations [species]
+            forward_rates: Forward rate constants k⁺ [reactions]
+            backward_rates: Backward rate constants k⁻ [reactions]
+            mode: Computation mode ("equilibrium", "local", or "auto")
+            equilibrium_tol: Relative tolerance for equilibrium detection
+            enforce_reciprocity: Whether to symmetrize and ensure positive definiteness
+            clip_eigenvalues: Minimum eigenvalue after reciprocity enforcement
+
+        Returns:
+            Dictionary containing:
+            - 'L': Onsager conductance matrix [reactions × reactions]
+            - 'forward_flux': Forward reaction fluxes [reactions]
+            - 'reverse_flux': Reverse reaction fluxes [reactions]
+            - 'net_flux': Net reaction fluxes [reactions]
+            - 'mode_used': Actual computation mode used
+            - 'near_equilibrium': Whether system is near equilibrium
+            - 'reaction_forces': Current reaction forces x = S^T ln(c) - ln(K_eq)
+
+        Examples:
+            Simple A ⇌ B reaction:
+            >>> network = ReactionNetwork(['A', 'B'], ['R1'], [[-1], [1]])
+            >>> result = network.compute_onsager_conductance(
+            ...     concentrations=[1.0, 2.0],
+            ...     forward_rates=[2.0],
+            ...     backward_rates=[1.0]
+            ... )
+            >>> print(f"L = {result['L']}, near_eq = {result['near_equilibrium']}")
+
+        References:
+            Diamond, S. (2025). "Log-Linear Reaction Quotient Dynamics"
+        """
+        # Input validation
+        concentrations = np.asarray(concentrations, dtype=float)
+        forward_rates = np.asarray(forward_rates, dtype=float)
+        backward_rates = np.asarray(backward_rates, dtype=float)
+
+        if len(concentrations) != self.n_species:
+            raise ValueError(f"Expected {self.n_species} concentrations, got {len(concentrations)}")
+        if len(forward_rates) != self.n_reactions:
+            raise ValueError(f"Expected {self.n_reactions} forward rates, got {len(forward_rates)}")
+        if len(backward_rates) != self.n_reactions:
+            raise ValueError(f"Expected {self.n_reactions} backward rates, got {len(backward_rates)}")
+
+        if not np.all(concentrations > 0):
+            raise ValueError("All concentrations must be positive")
+        if not np.all(forward_rates > 0):
+            raise ValueError("All forward rates must be positive")
+        if not np.all(backward_rates > 0):
+            raise ValueError("All backward rates must be positive")
+
+        # Compute flux components
+        forward_flux, reverse_flux, net_flux = self._compute_flux_parts(concentrations, forward_rates, backward_rates)
+
+        # Check if near equilibrium
+        flux_balance = np.linalg.norm(net_flux)
+        flux_magnitude = np.linalg.norm(forward_flux + reverse_flux) + 1e-30
+        near_equilibrium = flux_balance <= equilibrium_tol * flux_magnitude
+
+        # Choose computation mode
+        if mode == "auto":
+            mode_used = "equilibrium" if near_equilibrium else "local"
+        elif mode in ["equilibrium", "local"]:
+            mode_used = mode
+        else:
+            raise ValueError(f"Unknown mode: {mode}. Use 'equilibrium', 'local', or 'auto'.")
+
+        # Compute Onsager conductance matrix
+        if mode_used == "equilibrium":
+            L = self._compute_onsager_equilibrium(forward_flux, reverse_flux)
+        else:  # mode_used == "local"
+            L = self._compute_onsager_local(concentrations, forward_rates, backward_rates, forward_flux, reverse_flux)
+
+        # Optional reciprocity enforcement
+        if enforce_reciprocity:
+            L = self._enforce_onsager_reciprocity(L, clip_eigenvalues)
+
+        # Compute reaction forces
+        reaction_forces = self.compute_reaction_forces(concentrations, forward_rates, backward_rates)
+
+        return {
+            "L": L,
+            "forward_flux": forward_flux,
+            "reverse_flux": reverse_flux,
+            "net_flux": net_flux,
+            "mode_used": mode_used,
+            "near_equilibrium": near_equilibrium,
+            "reaction_forces": reaction_forces,
+        }
+
+    def _compute_onsager_equilibrium(self, forward_flux: np.ndarray, reverse_flux: np.ndarray) -> np.ndarray:
+        """Compute equilibrium Onsager conductance L = diag(v*).
+
+        At detailed balance, the conductance is diagonal with v* = f = r.
+        For near-equilibrium states, we approximate v* ≈ 0.5(f + r).
+
+        Args:
+            forward_flux: Forward reaction fluxes [reactions]
+            reverse_flux: Reverse reaction fluxes [reactions]
+
+        Returns:
+            Diagonal Onsager conductance matrix [reactions × reactions]
+        """
+        equilibrium_flux = 0.5 * (forward_flux + reverse_flux)
+        return np.diag(equilibrium_flux)
+
+    def _compute_onsager_local(
+        self,
+        concentrations: np.ndarray,
+        forward_rates: np.ndarray,
+        backward_rates: np.ndarray,
+        forward_flux: np.ndarray,
+        reverse_flux: np.ndarray,
+    ) -> np.ndarray:
+        """Compute local linearization Onsager conductance L = -A @ pinv(S^T).
+
+        Uses local linear response: J ≈ A * δ(ln c) where A = ∂J/∂(ln c).
+        Since δ(ln c) = pinv(S^T) * δx for reaction forces x, we get L = -A @ pinv(S^T).
+
+        Args:
+            concentrations: Species concentrations [species]
+            forward_rates: Forward rate constants [reactions]
+            backward_rates: Backward rate constants [reactions]
+            forward_flux: Forward reaction fluxes [reactions]
+            reverse_flux: Reverse reaction fluxes [reactions]
+
+        Returns:
+            Onsager conductance matrix from local linearization [reactions × reactions]
+        """
+        # Compute flux Jacobian A = ∂J/∂(ln c)
+        A = self._compute_flux_jacobian_ln(concentrations, forward_rates, backward_rates, forward_flux, reverse_flux)
+
+        # Moore-Penrose pseudoinverse of S^T
+        S_T_pinv = np.linalg.pinv(self.S.T)
+
+        # L = -A @ pinv(S^T)
+        L = -A @ S_T_pinv
+
+        return L
+
+    def _compute_flux_jacobian_ln(
+        self,
+        concentrations: np.ndarray,
+        forward_rates: np.ndarray,
+        backward_rates: np.ndarray,
+        forward_flux: np.ndarray,
+        reverse_flux: np.ndarray,
+    ) -> np.ndarray:
+        """Compute flux Jacobian A = ∂J/∂(ln c) for local linearization.
+
+        For mass action kinetics:
+        ∂J_j/∂(ln c_i) = A_ij * f_j - B_ij * r_j
+
+        where A_ij, B_ij are reactant/product stoichiometric coefficients.
+
+        Args:
+            concentrations: Species concentrations [species]
+            forward_rates: Forward rate constants [reactions]
+            backward_rates: Backward rate constants [reactions]
+            forward_flux: Forward reaction fluxes [reactions]
+            reverse_flux: Reverse reaction fluxes [reactions]
+
+        Returns:
+            Flux Jacobian matrix A [reactions × species]
+        """
+        # Get stoichiometry matrices
+        A_matrix = self.get_reactant_stoichiometry_matrix()  # [species × reactions]
+        B_matrix = self.get_product_stoichiometry_matrix()  # [species × reactions]
+
+        # A = diag(f) @ A^T - diag(r) @ B^T
+        # Shape: [reactions × species]
+        jacobian = np.diag(forward_flux) @ A_matrix.T - np.diag(reverse_flux) @ B_matrix.T
+
+        return jacobian
+
+    def _enforce_onsager_reciprocity(self, L: np.ndarray, clip_eigenvalues: float = 1e-12) -> np.ndarray:
+        """Enforce Onsager reciprocity (symmetry) and positive semi-definiteness.
+
+        Symmetrizes the matrix and clips negative eigenvalues to ensure
+        the matrix is positive semi-definite, as required by thermodynamics.
+
+        Args:
+            L: Input conductance matrix [reactions × reactions]
+            clip_eigenvalues: Minimum eigenvalue after clipping
+
+        Returns:
+            Symmetrized positive semi-definite matrix [reactions × reactions]
+        """
+        # Enforce symmetry (Onsager reciprocity)
+        L_symmetric = 0.5 * (L + L.T)
+
+        # Eigendecomposition
+        eigenvals, eigenvecs = np.linalg.eigh(L_symmetric)
+
+        # Clip negative eigenvalues to ensure positive semi-definiteness
+        eigenvals_clipped = np.maximum(eigenvals, clip_eigenvalues)
+
+        # Reconstruct matrix
+        L_psd = eigenvecs @ np.diag(eigenvals_clipped) @ eigenvecs.T
+
+        return L_psd
+
+    def compute_reaction_forces(
+        self, concentrations: np.ndarray, forward_rates: np.ndarray, backward_rates: np.ndarray
+    ) -> np.ndarray:
+        """Compute reaction forces x = S^T ln(c) - ln(K_eq).
+
+        Reaction forces represent thermodynamic driving forces that push
+        reactions away from equilibrium. At equilibrium, all forces are zero.
+
+        Args:
+            concentrations: Current species concentrations [species]
+            forward_rates: Forward rate constants k⁺ [reactions]
+            backward_rates: Backward rate constants k⁻ [reactions]
+
+        Returns:
+            Reaction forces x [reactions]
+        """
+        concentrations = np.asarray(concentrations)
+
+        # Compute ln(Q) = S^T ln(c) where Q are reaction quotients
+        ln_c = np.log(np.maximum(concentrations, 1e-300))
+        ln_Q = self.S.T @ ln_c
+
+        # Compute ln(K_eq) = ln(k⁺/k⁻)
+        ln_K_eq = np.log(forward_rates / backward_rates)
+
+        # Reaction forces: x = ln(Q) - ln(K_eq) = ln(Q/K_eq)
+        reaction_forces = ln_Q - ln_K_eq
+
+        return reaction_forces
+
+    def compute_flux_response_matrix(self, concentrations: np.ndarray) -> np.ndarray:
+        """Compute flux response matrix B(c) = S^T diag(1/c) S.
+
+        This matrix appears in the relation: dx/dt = B(c) J
+        where x = S^T ln(c) - ln(K_eq) are reaction forces and J are net fluxes.
+
+        Args:
+            concentrations: Species concentrations [species]
+
+        Returns:
+            Flux response matrix B [reactions × reactions]
+        """
+        concentrations = np.asarray(concentrations)
+
+        if len(concentrations) != self.n_species:
+            raise ValueError(f"Expected {self.n_species} concentrations, got {len(concentrations)}")
+        if not np.all(concentrations > 0):
+            raise ValueError("All concentrations must be positive")
+
+        # Inverse concentration diagonal matrix
+        inv_c_diag = np.diag(1.0 / concentrations)
+
+        # B(c) = S^T diag(1/c) S
+        B = self.S.T @ inv_c_diag @ self.S
+
+        return B
+
+    def compute_linear_relaxation_matrix(
+        self, concentrations: np.ndarray, forward_rates: np.ndarray, backward_rates: np.ndarray, **onsager_kwargs
+    ) -> Dict[str, Any]:
+        """Compute linear relaxation matrix K(c) ≈ B(c) L(c).
+
+        In the linear regime near equilibrium, reaction force dynamics follow:
+        dx/dt ≈ -K(c) x + external_drives
+
+        where K = B(c) L(c) combines flux response B and Onsager conductance L.
+
+        Args:
+            concentrations: Species concentrations [species]
+            forward_rates: Forward rate constants k⁺ [reactions]
+            backward_rates: Backward rate constants k⁻ [reactions]
+            **onsager_kwargs: Additional arguments passed to compute_onsager_conductance
+
+        Returns:
+            Dictionary containing:
+            - 'K': Linear relaxation matrix [reactions × reactions]
+            - 'B': Flux response matrix [reactions × reactions]
+            - 'L': Onsager conductance matrix [reactions × reactions]
+            - 'onsager_info': Full result from compute_onsager_conductance
+        """
+        # Compute Onsager conductance
+        onsager_result = self.compute_onsager_conductance(concentrations, forward_rates, backward_rates, **onsager_kwargs)
+        L = onsager_result["L"]
+
+        # Compute flux response matrix
+        B = self.compute_flux_response_matrix(concentrations)
+
+        # Linear relaxation matrix
+        K = B @ L
+
+        return {
+            "K": K,
+            "B": B,
+            "L": L,
+            "onsager_info": onsager_result,
+        }
+
+    def check_detailed_balance(
+        self, concentrations: np.ndarray, forward_rates: np.ndarray, backward_rates: np.ndarray, tol: float = 1e-10
+    ) -> Dict[str, Any]:
+        """Check if system satisfies detailed balance condition.
+
+        Detailed balance requires that at equilibrium, forward and reverse
+        fluxes are equal for each reaction: f_j = r_j for all j.
+
+        This is equivalent to: Q_j = K_j where Q_j are reaction quotients
+        and K_j = k_j⁺/k_j⁻ are equilibrium constants.
+
+        Args:
+            concentrations: Species concentrations [species]
+            forward_rates: Forward rate constants k⁺ [reactions]
+            backward_rates: Backward rate constants k⁻ [reactions]
+            tol: Tolerance for balance check
+
+        Returns:
+            Dictionary containing:
+            - 'detailed_balance': Whether detailed balance is satisfied
+            - 'forward_flux': Forward reaction fluxes [reactions]
+            - 'reverse_flux': Reverse reaction fluxes [reactions]
+            - 'flux_ratio': Ratio f_j/r_j for each reaction [reactions]
+            - 'reaction_quotients': Current reaction quotients Q_j [reactions]
+            - 'equilibrium_constants': Equilibrium constants K_j [reactions]
+            - 'quotient_ratio': Ratio Q_j/K_j for each reaction [reactions]
+            - 'max_imbalance': Maximum relative imbalance across reactions
+        """
+        # Compute fluxes
+        forward_flux, reverse_flux, _ = self._compute_flux_parts(concentrations, forward_rates, backward_rates)
+
+        # Compute reaction quotients and equilibrium constants
+        Q = self.compute_reaction_quotients(concentrations)
+        K = forward_rates / backward_rates
+
+        # Check balance conditions
+        flux_ratio = np.divide(forward_flux, reverse_flux, out=np.ones_like(forward_flux), where=reverse_flux != 0)
+        quotient_ratio = np.divide(Q, K, out=np.ones_like(Q), where=K != 0)
+
+        # Maximum imbalance (should be ~1 at detailed balance)
+        max_flux_imbalance = np.max(np.abs(flux_ratio - 1))
+        max_quotient_imbalance = np.max(np.abs(quotient_ratio - 1))
+        max_imbalance = max(max_flux_imbalance, max_quotient_imbalance)
+
+        # Overall detailed balance condition
+        detailed_balance = max_imbalance <= tol
+
+        return {
+            "detailed_balance": detailed_balance,
+            "forward_flux": forward_flux,
+            "reverse_flux": reverse_flux,
+            "flux_ratio": flux_ratio,
+            "reaction_quotients": Q,
+            "equilibrium_constants": K,
+            "quotient_ratio": quotient_ratio,
+            "max_imbalance": max_imbalance,
+        }
+
     @classmethod
     def from_sbml_data(cls, sbml_data: Dict[str, Any]) -> "ReactionNetwork":
         """Create ReactionNetwork from SBML parser data.
