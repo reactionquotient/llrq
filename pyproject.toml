@@ -33,6 +33,7 @@ dependencies = [
     "matplotlib>=3.3.0",
     "python-libsbml>=5.19.0",
     "tellurium>=2.2.0",
+    "cvxpy>=1.7.2",
 ]
 
 [project.urls]

@@ -34,6 +34,9 @@ except ImportError:
     # Mass action simulation not available without roadrunner/tellurium
     pass
 
+# CVXpy-based control (required dependency)
+from .cvx_control import CVXController, CVXObjectives, CVXConstraints, create_entropy_aware_cvx_controller
+
 
 # Convenience functions
 def from_sbml(sbml_file: str, equilibrium_constants=None, relaxation_matrix=None, external_drive=None):
@@ -300,6 +303,9 @@ def create_controlled_simulation(
     return ControlledSimulation(solver, controller)
 
 
+## CVXPy is a required dependency; helper availability functions removed.
+
+
 # Package metadata
 __all__ = [
     # Core classes
@@ -320,6 +326,11 @@ __all__ = [
     "ControlledSimulation",
     "FrequencySpaceController",
     "MassActionSimulator",  # May not be available
+    # CVXpy-based control
+    "CVXController",
+    "CVXObjectives",
+    "CVXConstraints",
+    "create_entropy_aware_cvx_controller",
     # Convenience functions
     "from_sbml",
     "simple_reaction",
