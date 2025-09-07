@@ -64,15 +64,11 @@ def foh_discretize(A: ArrayLike, B: ArrayLike, dt: float) -> tuple[np.ndarray, n
     # M = [[A, B, 0],
     #      [0, 0, I],
     #      [0, 0, 0]]
-    M = np.block([
-        [A,   B,   Znm],
-        [Zmn, Zmm, Im ],
-        [Zmn, Zmm, Zmm]
-    ])
+    M = np.block([[A, B, Znm], [Zmn, Zmm, Im], [Zmn, Zmm, Zmm]])
     E = expm(M * dt)
-    Ad = E[:n, :n]              # (n x n)
-    B0 = E[:n, n:n+m]           # (n x m)
-    B1 = E[:n, n+m:n+2*m]       # (n x m)
+    Ad = E[:n, :n]  # (n x n)
+    B0 = E[:n, n : n + m]  # (n x m)
+    B1 = E[:n, n + m : n + 2 * m]  # (n x m)
     return Ad, B0, B1
 
 
@@ -88,10 +84,9 @@ def simulate_zoh(A: ArrayLike, B: ArrayLike, u_of_t, t_grid: np.ndarray, y0: Arr
     Y = np.zeros((len(t_grid), y.size))
     Y[0] = y
     for k in range(1, len(t_grid)):
-        dt = float(t_grid[k] - t_grid[k-1])
+        dt = float(t_grid[k] - t_grid[k - 1])
         Ad, Bd = zoh_discretize(A, B, dt)
-        u_k = np.array(u_of_t(float(t_grid[k-1]))).reshape(-1)
+        u_k = np.array(u_of_t(float(t_grid[k - 1]))).reshape(-1)
         y = Ad @ y + Bd @ u_k
         Y[k] = y
     return Y
-

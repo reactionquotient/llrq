@@ -2,15 +2,18 @@ import numpy as np
 from numpy.linalg import lstsq, norm
 from scipy.linalg import svd
 
+
 def _nullspace(M, rtol=1e-12):
     """Right nullspace of M (columns span ker(M))."""
     U, s, Vt = svd(M, full_matrices=True)
     rank = (s > rtol * s.max()).sum()
     return Vt[rank:].T  # shape: cols = nullity
 
+
 def _left_nullspace(M, rtol=1e-12):
     """Left nullspace of M: columns L with L^T M = 0 (i.e., ker(M^T))."""
     return _nullspace(M.T, rtol)
+
 
 def equilibrium_mass_action_detailed_balance(A, B, kf, kr, c0, tol=1e-10, max_iter=100):
     """
@@ -49,14 +52,14 @@ def equilibrium_mass_action_detailed_balance(A, B, kf, kr, c0, tol=1e-10, max_it
         raise ValueError("This solver assumes all reactions are reversible (kf, kr > 0).")
 
     # Net stoichiometry and equilibrium constants
-    N = B - A                                  # shape (n, r)
-    lnK = np.log(kf / kr)                      # shape (r,)
+    N = B - A  # shape (n, r)
+    lnK = np.log(kf / kr)  # shape (r,)
 
     # 1) Solve N^T x = ln K for x = ln c (particular solution).
     #    (This encodes N^T ln c = ln K  <=>  Q(c)=K, i.e., detailed balance. :contentReference[oaicite:1]{index=1})
     #    Use least-squares, then check consistency (Wegscheider conditions).
-    NT = N.T                                   # shape (r, n)
-    x_p, *_ = lstsq(NT, lnK, rcond=None)       # particular solution
+    NT = N.T  # shape (r, n)
+    x_p, *_ = lstsq(NT, lnK, rcond=None)  # particular solution
     resid = norm(NT @ x_p - lnK)
 
     # If residual isn't tiny, the supplied K's violate thermodynamic consistency.
@@ -67,7 +70,7 @@ def equilibrium_mass_action_detailed_balance(A, B, kf, kr, c0, tol=1e-10, max_it
         )
 
     # 2) Add the general solution of N^T x = lnK: x = x_p + Z y,  where columns of Z span ker(N^T).
-    Z = _nullspace(NT)                         # shape (n, p), p = n - rank(N)
+    Z = _nullspace(NT)  # shape (n, p), p = n - rank(N)
     p = Z.shape[1]
 
     # If p == 0, no conserved moieties: unique ln c.
@@ -77,7 +80,7 @@ def equilibrium_mass_action_detailed_balance(A, B, kf, kr, c0, tol=1e-10, max_it
 
     # 3) Enforce conservation laws using initial totals.
     #    Columns of L span the left nullspace of N: L^T N = 0 ⇒ L^T c is conserved.
-    L = _left_nullspace(N)                     # shape (n, p)
+    L = _left_nullspace(N)  # shape (n, p)
     # Project to the same subspace dimension as Z; bases may differ by invertible p×p transform.
     # We’ll use the L we computed to write constraints L^T exp(x_p + Z y) = L^T c0.
     m = L.T @ c0
@@ -87,7 +90,7 @@ def equilibrium_mass_action_detailed_balance(A, B, kf, kr, c0, tol=1e-10, max_it
     for it in range(max_iter):
         x = x_p + Z @ y
         c = np.exp(x)
-        g = L.T @ c - m                         # shape (p,)
+        g = L.T @ c - m  # shape (p,)
         g_norm = norm(g, ord=2)
         if g_norm < tol:
             return c, {"iterations": it, "conservation_residual": float(g_norm), "p": p}
@@ -124,6 +127,7 @@ def equilibrium_mass_action_detailed_balance(A, B, kf, kr, c0, tol=1e-10, max_it
         "p": p,
         "warning": "Max iterations reached",
     }
+
 
 # ---------- Convenience: build A, B from a reaction list ----------
 def build_stoichiometry(species, reactions):

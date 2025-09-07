@@ -12,7 +12,7 @@ d/dt ln Q = -K ln(Q/Keq) + u(t)
 
 where:
 - **Q** = vector of reaction quotients
-- **Keq** = equilibrium constants  
+- **Keq** = equilibrium constants
 - **u(t)** = external drives
 - **K** = relaxation/dynamics matrix (computed by this algorithm)
 

@@ -15,7 +15,7 @@ d/dt ln Q = -K ln(Q/Keq) + u(t)
 
 Where:
 - **Q**: Vector of reaction quotients measuring distance from equilibrium
-- **Keq**: Vector of equilibrium constants  
+- **Keq**: Vector of equilibrium constants
 - **K**: Relaxation rate matrix
 - **u(t)**: External drive vector (e.g., ATP/ADP ratios)
 
@@ -23,7 +23,7 @@ Where:
 
 1. **Analytical Solutions**: Exact solutions exist for arbitrary network topologies
 2. **Thermodynamic Integration**: Automatic incorporation of constraints via ΔG = RT ln(Q/Keq)
-3. **Decoupled Dynamics**: Conservation laws separate from reaction quotient evolution  
+3. **Decoupled Dynamics**: Conservation laws separate from reaction quotient evolution
 4. **Linear Control**: External energy sources couple linearly to dynamics
 5. **Tractable Analysis**: Decades of linear systems theory become applicable
 
@@ -59,7 +59,7 @@ import numpy as np
 # Create a simple A ⇌ B reaction
 network, dynamics, solver, visualizer = llrq.simple_reaction(
     reactant_species="A",
-    product_species="B", 
+    product_species="B",
     equilibrium_constant=2.0,
     relaxation_rate=1.0,
     initial_concentrations={"A": 1.0, "B": 0.1}
@@ -98,7 +98,7 @@ solution = solver.solve(
     t_span=(0, 20)
 )
 
-# Plot results  
+# Plot results
 fig = visualizer.plot_dynamics(solution)
 ```
 
@@ -108,7 +108,7 @@ fig = visualizer.plot_dynamics(solution)
 
 - **`SBMLParser`**: Parse SBML models and extract network information
 - **`ReactionNetwork`**: Represent reaction networks with stoichiometry and species
-- **`LLRQDynamics`**: Implement log-linear dynamics system 
+- **`LLRQDynamics`**: Implement log-linear dynamics system
 - **`LLRQSolver`**: Solve dynamics with analytical and numerical methods
 - **`LLRQVisualizer`**: Create publication-quality plots
 
@@ -152,14 +152,14 @@ ln Q(t) = exp(-Kt) * [ln(Q₀/Keq) - K⁻¹u] + K⁻¹u + ln Keq
 
 ### Connection to Mass Action
 For single reaction A ⇌ B with mass action rates kf, kr:
-- Equilibrium constant: `Keq = kf/kr`  
+- Equilibrium constant: `Keq = kf/kr`
 - Relaxation rate: `k = kr(1 + Keq)` (ensures agreement near equilibrium)
 
 ## Applications
 
 This framework enables:
 - **Metabolic Engineering**: Optimize pathway design using K as design variable
-- **Drug Discovery**: Predict drug effects throughout metabolic networks  
+- **Drug Discovery**: Predict drug effects throughout metabolic networks
 - **Systems Medicine**: Classify metabolic disorders via eigenvalue analysis
 - **Control Theory**: Apply optimal control to cellular metabolism
 
@@ -183,5 +183,5 @@ Licensed under the Apache License 2.0. See `LICENSE` file for details.
 ## Contact
 
 - **Author**: Steven Diamond
-- **Email**: steven@gridmatic.com  
+- **Email**: steven@gridmatic.com
 - **Paper**: [arXiv:2508.18523](https://arxiv.org/pdf/2508.18523)

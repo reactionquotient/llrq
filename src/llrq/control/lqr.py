@@ -1,14 +1,16 @@
-import numpy as np
 import warnings
+
+import numpy as np
 from scipy.linalg import solve_continuous_are
+
 
 class LQRController:
     """
     LQR for the reduced LLRQ model.
     Controls y in dot y = A y + B uhat + d(t), then maps to full u_full = G uhat.
     """
-    def __init__(self, solver, controlled_reactions, Q=None, R=None,
-                 integral=False, Ki_weight=1.0):
+
+    def __init__(self, solver, controlled_reactions, Q=None, R=None, integral=False, Ki_weight=1.0):
         """
         Args:
             solver: LLRQSolver (already built, with _B, _rankS, dynamics.K, etc.)
@@ -60,19 +62,15 @@ class LQRController:
             self.F_eta = None
         else:
             # Augment with integral states: z = [y; eta], eta_dot = y - y_ref
-            A_aug = np.block([
-                [self.A,               np.zeros((self.ny, self.ny))],
-                [np.eye(self.ny),      np.zeros((self.ny, self.ny))]
-            ])
+            A_aug = np.block([[self.A, np.zeros((self.ny, self.ny))], [np.eye(self.ny), np.zeros((self.ny, self.ny))]])
             B_aug = np.vstack([self.B, np.zeros((self.ny, self.m))])
-            Q_aug = np.block([
-                [self.Q,                         np.zeros((self.ny, self.ny))],
-                [np.zeros((self.ny, self.ny)),   Ki_weight*np.eye(self.ny)]
-            ])
+            Q_aug = np.block(
+                [[self.Q, np.zeros((self.ny, self.ny))], [np.zeros((self.ny, self.ny)), Ki_weight * np.eye(self.ny)]]
+            )
             P = solve_continuous_are(A_aug, B_aug, Q_aug, self.R)
             K_aug = np.linalg.solve(self.R, B_aug.T @ P)  # (m x 2ny)
-            self.F_y   = K_aug[:, :self.ny]
-            self.F_eta = K_aug[:, self.ny:]
+            self.F_y = K_aug[:, : self.ny]
+            self.F_eta = K_aug[:, self.ny :]
             self._eta = np.zeros(self.ny)
             self._last_t = None
 
@@ -95,15 +93,14 @@ class LQRController:
             if self._last_t is None:
                 self._last_t = t
             dt = max(0.0, t - self._last_t)
-            self._eta = self._eta + dt*e
+            self._eta = self._eta + dt * e
             self._last_t = t
-            uhat = - self.F_y @ e - self.F_eta @ self._eta
+            uhat = -self.F_y @ e - self.F_eta @ self._eta
         else:
-            uhat = - self.F_y @ e
+            uhat = -self.F_y @ e
 
         if uhat_bounds is not None:
             umin, umax = uhat_bounds
             uhat = np.minimum(np.maximum(uhat, umin), umax)
 
         return self.G @ uhat  # map to full r-dim force
-

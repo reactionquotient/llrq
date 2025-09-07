@@ -13,7 +13,7 @@ species_ids = ['A', 'B', 'C']
 reaction_ids = ['R1', 'R2']  # A ⇌ B ⇌ C
 S = np.array([
     [-1, 0],   # A: consumed in R1
-    [1, -1],   # B: produced in R1, consumed in R2  
+    [1, -1],   # B: produced in R1, consumed in R2
     [0, 1]     # C: produced in R2
 ])
 
@@ -92,7 +92,7 @@ Use when the system operates near thermodynamic equilibrium:
 ```python
 # Good for: metabolic networks, enzyme systems near equilibrium
 dynamics = LLRQDynamics.from_mass_action(
-    network, c_star, k_plus, k_minus, 
+    network, c_star, k_plus, k_minus,
     mode='equilibrium'
 )
 ```
@@ -106,7 +106,7 @@ Use for systems far from equilibrium or driven by external fluxes:
 ```python
 # Good for: driven systems, systems with large concentration gradients
 dynamics = LLRQDynamics.from_mass_action(
-    network, c_star, k_plus, k_minus, 
+    network, c_star, k_plus, k_minus,
     mode='nonequilibrium'
 )
 ```
@@ -171,9 +171,9 @@ print(f"Off-diagonal coupling: {np.max(np.abs(dynamics.K - np.diag(np.diag(dynam
 species = ['A', 'B', 'C', 'D']
 reactions = ['R1', 'R2', 'R3']
 S = np.array([
-    [-1, 0, 0],   # A → 
+    [-1, 0, 0],   # A →
     [1, -1, 0],   # → B →
-    [0, 1, -1],   # → C →  
+    [0, 1, -1],   # → C →
     [0, 0, 1]     # → D
 ])
 
@@ -237,7 +237,7 @@ else:
 ```python
 # If your system satisfies detailed balance
 dynamics = LLRQDynamics.from_mass_action(
-    ..., 
+    ...,
     enforce_symmetry=True  # Ensures K is symmetric positive definite
 )
 ```
@@ -254,7 +254,7 @@ try:
 except LinAlgError:
     print("Check for conservation laws or linear dependencies")
 
-# Issue: Non-equilibrium concentrations  
+# Issue: Non-equilibrium concentrations
 # Solution: Verify equilibrium conditions
 def check_equilibrium(c_star, k_plus, k_minus, S):
     for j in range(len(k_plus)):

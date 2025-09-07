@@ -3,9 +3,7 @@ import numpy as np
 import pytest
 from scipy.linalg import expm
 
-from llrq.ops.time_varying import (
-    exact_const_solution, zoh_discretize, foh_discretize, simulate_zoh
-)
+from llrq.ops.time_varying import exact_const_solution, foh_discretize, simulate_zoh, zoh_discretize
 
 rng = np.random.default_rng(2025)
 
@@ -13,7 +11,7 @@ rng = np.random.default_rng(2025)
 def _stable_A(n=2, seed=0):
     rng = np.random.default_rng(seed)
     Q, _ = np.linalg.qr(rng.standard_normal((n, n)))
-    lambdas = -0.5 - 1.2 * rng.random(n)   # negative real parts
+    lambdas = -0.5 - 1.2 * rng.random(n)  # negative real parts
     return Q @ np.diag(lambdas) @ np.linalg.inv(Q)
 
 
@@ -49,7 +47,9 @@ def test_foh_ramp_matches_high_res_reference_and_beats_zoh():
     # Ramp input: u(t) = u0 + a*t
     u0 = 0.3
     a = -0.08
-    def u_of_t(t): return np.array([u0 + a*t])
+
+    def u_of_t(t):
+        return np.array([u0 + a * t])
 
     # Reference: very fine ZOH stepping of the true ramp
     t_ref = np.arange(0.0, T + 1e-12, dt_ref)
@@ -88,4 +88,3 @@ def test_shapes_and_basic_stability():
     # discrete eigenvalues should lie inside unit circle for stable A (small dt)
     radii = np.abs(np.linalg.eigvals(Ad))
     assert np.max(radii) < 1.0
-
