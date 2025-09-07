@@ -18,6 +18,7 @@ __email__ = "steven@gridmatic.com"
 
 # Control and simulation
 from .control import AdaptiveController, ControlledSimulation, LLRQController, design_lqr_controller
+from .frequency_control import FrequencySpaceController
 from .llrq_dynamics import LLRQDynamics
 from .reaction_network import ReactionNetwork
 
@@ -312,6 +313,7 @@ __all__ = [
     "AdaptiveController",
     "design_lqr_controller",
     "ControlledSimulation",
+    "FrequencySpaceController",
     "MassActionSimulator",  # May not be available
     # Convenience functions
     "from_sbml",
