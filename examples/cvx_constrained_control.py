@@ -80,7 +80,7 @@ def demo_constrained_control():
 
     # Unconstrained solution for comparison
     print(f"\n=== Unconstrained Control (Baseline) ===")
-    u_unconstrained = analytical_controller.compute_steady_state_control(solver._compute_reduced_state_from_forces(x_target))
+    u_unconstrained = analytical_controller.compute_steady_state_control(solver._B.T @ x_target)
     print(f"Unconstrained control: {u_unconstrained}")
     print(f"Control range: [{u_unconstrained.min():.3f}, {u_unconstrained.max():.3f}]")
     print(f"L1 norm: {np.linalg.norm(u_unconstrained, 1):.4f}")

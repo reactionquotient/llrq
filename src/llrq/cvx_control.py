@@ -130,9 +130,6 @@ class CVXController(LLRQController):
 
         # Build constraints
         constraints = []
-        # Always link state and control when x is present to make problems well-posed
-        if "x" in variables:
-            constraints.append(self.solver.dynamics.K @ variables["x"] == variables["u"])
         if constraints_fn is not None:
             constraints.extend(constraints_fn(variables, params))
 
@@ -303,7 +300,6 @@ class CVXConstraints:
             x = variables["x"]
             K = params["K"]
 
-            print(K)
             return [K @ x == u]
 
         return constraints

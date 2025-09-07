@@ -95,7 +95,7 @@ class TestCVXController:
         controller = CVXController(simple_system["solver"])
 
         x_target = np.array([0.5])
-        result = controller.compute_cvx_control(x_target=x_target)
+        result = controller.compute_cvx_control(x_target=x_target, constraints_fn=CVXConstraints.steady_state())
 
         assert result["status"] in ["optimal", "optimal_inaccurate"]
         assert result["variables"]["x"] is not None

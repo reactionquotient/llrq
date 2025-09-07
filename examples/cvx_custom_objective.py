@@ -140,7 +140,7 @@ def demo_custom_objectives():
 
         # Additional robustness constraint: limit state magnitude
         x = variables["x"]
-        constraints.append(cp.norm(x, cp.inf) <= 2.0)  # Infinity norm constraint
+        constraints.append(cp.norm(x, "inf") <= 2.0)  # Infinity norm constraint
 
         return constraints
 
@@ -173,9 +173,9 @@ def demo_custom_objectives():
         # Entropy production (quadratic in u)
         entropy_rate = cp.quad_form(u, M)
 
-        # Custom weighting: entropy penalty increases with tracking error
-        # This encourages solutions that don't sacrifice too much accuracy for entropy
-        entropy_weight = 0.1 + 0.05 * tracking_error  # Dynamic weighting
+        # Custom weighting: fixed weights for convex formulation
+        # In a real application, this could be tuned based on operating conditions
+        entropy_weight = 0.15  # Fixed weighting for convexity
 
         return tracking_error + entropy_weight * entropy_rate
 
@@ -283,7 +283,7 @@ def demo_custom_objectives():
 
         # Penalty on control "roughness" (differences between adjacent controls)
         # This promotes smooth control allocation
-        if len(u) > 1:
+        if u.shape[0] > 1:
             smoothness_penalty = cp.sum_squares(u[1:] - u[:-1])
         else:
             smoothness_penalty = 0
