@@ -58,7 +58,7 @@ def main():
     print("\\n2. Choosing target concentrations...")
     
     initial_concentrations = {"A": 2.0, "B": 0.2, "C": 0.1}
-    target_concentrations = {"A": 0.8, "B": 1.2, "C": 1.0}  # Total mass = 3.0
+    target_concentrations = {"A": 0.8, "B": 1.2, "C": 0.3}  # Total mass = 2.3 (same as initial)
     
     print(f"Initial: {initial_concentrations}")
     print(f"Target:  {target_concentrations}")

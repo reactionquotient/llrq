@@ -132,24 +132,25 @@ def simulate_to_target(network_or_dynamics,
                       target_concentrations: dict,
                       controlled_reactions=None,
                       t_span=(0, 100),
-                      method='auto',
+                      method='linear',
                       feedback_gain=1.0,
                       **kwargs):
     """One-line controlled simulation to target concentrations.
     
     This function implements the core workflow from linear_vs_mass_action.py:
     1. Setup reaction with initial concentrations
-    2. Choose target point  
+    2. Choose target concentrations (must satisfy conservation laws)
     3. Compute static control input to reach target
     4. Simulate controlled dynamics
     
     Args:
         network_or_dynamics: ReactionNetwork or LLRQDynamics object
-        initial_concentrations: Initial species concentrations
-        target_concentrations: Target species concentrations
+        initial_concentrations: Initial species concentrations (dict)
+        target_concentrations: Target species concentrations (dict).
+                              Must satisfy same conservation laws as initial.
         controlled_reactions: List of reactions to control. If None, uses all reactions
         t_span: Time span for simulation
-        method: Simulation method ('auto', 'linear', 'mass_action')
+        method: Simulation method ('linear' or 'mass_action')
         feedback_gain: Proportional feedback gain
         **kwargs: Additional arguments passed to solve_with_control
         
@@ -202,8 +203,9 @@ def compare_control_methods(network_or_dynamics,
     
     Args:
         network_or_dynamics: ReactionNetwork or LLRQDynamics object
-        initial_concentrations: Initial species concentrations
-        target_concentrations: Target species concentrations
+        initial_concentrations: Initial species concentrations (dict)
+        target_concentrations: Target species concentrations (dict).
+                              Must satisfy same conservation laws as initial.
         controlled_reactions: List of reactions to control
         t_span: Time span for simulation
         feedback_gain: Proportional feedback gain

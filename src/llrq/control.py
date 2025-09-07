@@ -340,17 +340,18 @@ class ControlledSimulation:
                           initial_concentrations: Union[Dict[str, float], np.ndarray],
                           target_state: Union[Dict[str, float], np.ndarray, str],
                           t_span: Union[Tuple[float, float], np.ndarray],
-                          method: str = 'auto',
+                          method: str = 'linear',
                           feedback_gain: float = 1.0,
                           disturbance_function: Optional[Callable[[float], np.ndarray]] = None,
                           **kwargs) -> Dict[str, Any]:
-        """Simulate controlled dynamics to reach target state.
+        """Simulate controlled dynamics to reach target concentrations.
         
         Args:
-            initial_concentrations: Initial species concentrations
-            target_state: Target as concentrations dict, reaction quotients, or 'equilibrium'
+            initial_concentrations: Initial species concentrations (dict or array)
+            target_state: Target concentrations (dict or array) or 'equilibrium'.
+                         Must satisfy same conservation laws as initial concentrations.
             t_span: Time span for simulation
-            method: Simulation method ('auto', 'linear', 'mass_action')
+            method: Simulation method ('linear' or 'mass_action')
             feedback_gain: Proportional feedback gain
             disturbance_function: Optional disturbance function f(t) -> disturbance
             **kwargs: Additional simulation arguments
@@ -379,8 +380,9 @@ class ControlledSimulation:
         """Compare linear LLRQ vs mass action control performance.
         
         Args:
-            initial_concentrations: Initial species concentrations
-            target_state: Target state specification
+            initial_concentrations: Initial species concentrations (dict or array)
+            target_state: Target concentrations (dict or array) or 'equilibrium'.
+                         Must satisfy same conservation laws as initial concentrations.
             t_span: Time span for simulation
             feedback_gain: Proportional feedback gain
             disturbance_function: Optional disturbance function f(t) -> disturbance

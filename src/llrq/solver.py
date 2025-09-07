@@ -429,26 +429,24 @@ class LLRQSolver:
                           target_state: Union[np.ndarray, Dict[str, float], str],
                           t_span: Union[Tuple[float, float], np.ndarray],
                           controlled_reactions: Optional[list] = None,
-                          method: str = 'auto',
-                          use_mass_action: bool = False,
+                          method: str = 'linear',
                           compare_methods: bool = False,
                           feedback_gain: float = 1.0,
                           disturbance_function: Optional[Callable[[float], np.ndarray]] = None,
                           **kwargs) -> Dict[str, Any]:
-        """Solve dynamics with automatic control to reach target state.
+        """Solve dynamics with automatic control to reach target concentrations.
         
         This is the main entry point for controlled simulations, implementing
-        the core workflow: setup -> target -> control -> simulate.
+        the core workflow: setup → target → control → simulate.
         
         Args:
-            initial_conditions: Initial concentrations or reaction quotients
-            target_state: Target as concentrations dict, reaction quotients array, 
-                         or 'equilibrium' for automatic equilibrium target
+            initial_conditions: Initial species concentrations (dict or array)
+            target_state: Target concentrations (dict or array) or 'equilibrium'.
+                         Target concentrations must satisfy conservation laws.
             t_span: Time span as (t0, tf) or array of time points
             controlled_reactions: List of reaction IDs/indices to control.
                                 If None, uses all reactions
-            method: Simulation method ('auto', 'linear', 'mass_action')
-            use_mass_action: If True, use mass action simulation
+            method: Simulation method ('linear' or 'mass_action')
             compare_methods: If True, return both linear and mass action results
             feedback_gain: Proportional feedback gain for control
             disturbance_function: Function f(t) -> disturbance for testing robustness
@@ -484,23 +482,12 @@ class LLRQSolver:
         results = {}
         
         # Determine simulation methods to use
-        methods_to_run = []
         if compare_methods:
             methods_to_run = ['linear', 'mass_action']
-        elif method == 'auto':
-            # Auto-select based on system size and mass action availability
-            if use_mass_action:
-                try:
-                    from .mass_action_simulator import MassActionSimulator
-                    methods_to_run = ['mass_action']
-                except ImportError:
-                    methods_to_run = ['linear']
-            else:
-                methods_to_run = ['linear']
         elif method in ['linear', 'mass_action']:
             methods_to_run = [method]
         else:
-            raise ValueError(f"Invalid method '{method}'. Use 'auto', 'linear', or 'mass_action'")
+            raise ValueError(f"Invalid method '{method}'. Use 'linear' or 'mass_action'")
         
         # Run simulations
         for sim_method in methods_to_run:
@@ -542,46 +529,87 @@ class LLRQSolver:
         
         return results
     
+    def validate_conservation_laws(self, c_initial: np.ndarray, c_target: np.ndarray, 
+                                 rtol: float = 1e-6) -> Tuple[bool, str]:
+        """Validate that target concentrations satisfy conservation laws.
+        
+        This ensures that the target concentrations are thermodynamically consistent
+        with the initial concentrations - they must conserve the same quantities.
+        
+        Args:
+            c_initial: Initial species concentrations
+            c_target: Target species concentrations  
+            rtol: Relative tolerance for conservation check
+            
+        Returns:
+            (is_valid, error_message): Tuple with validation result and error description
+        """
+        C = self.network.find_conservation_laws()
+        if C.shape[0] == 0:
+            return True, ""  # No conservation laws to check
+        
+        cons_initial = C @ c_initial
+        cons_target = C @ c_target
+        
+        if not np.allclose(cons_initial, cons_target, rtol=rtol):
+            violations = cons_target - cons_initial
+            max_violation = np.max(np.abs(violations))
+            
+            # Create helpful error message
+            error_msg = f"Target concentrations violate conservation laws.\n"
+            error_msg += f"Maximum violation: {max_violation:.6e} (tolerance: {rtol:.6e})\n"
+            error_msg += f"Initial conserved quantities: {cons_initial}\n"
+            error_msg += f"Target conserved quantities:  {cons_target}\n"
+            error_msg += f"Violations: {violations}"
+            
+            return False, error_msg
+        
+        return True, ""
+    
     def _parse_target_state(self, target_state, c0: np.ndarray) -> np.ndarray:
-        """Parse target state into reduced state coordinates."""
+        """Parse target concentrations and convert to reduced state coordinates.
+        
+        Target must be species concentrations that satisfy conservation laws.
+        The workflow is: concentrations → validate conservation → quotients → reduced state
+        
+        Args:
+            target_state: Target concentrations (dict or array) or 'equilibrium'
+            c0: Initial concentrations for conservation validation
+            
+        Returns:
+            Target in reduced state coordinates (y)
+        """
+        # Special case: equilibrium target
         if isinstance(target_state, str):
             if target_state == 'equilibrium':
-                # Use current equilibrium as target
-                Q_eq = self._Keq_consistent
-                x_eq = np.log(Q_eq) - self._lnKeq_consistent  # Should be ~0
-                y_eq = self._B.T @ self._P @ x_eq
-                return y_eq
+                # Equilibrium corresponds to y = 0 (no deviation from equilibrium)
+                return np.zeros(self._rankS)
             else:
-                raise ValueError(f"Unknown target state '{target_state}'")
+                raise ValueError(f"Unknown target state '{target_state}'. Only 'equilibrium' is supported.")
         
-        elif isinstance(target_state, dict):
-            # Target concentrations provided
+        # Parse concentrations from dict or array
+        if isinstance(target_state, dict):
             c_target = self._parse_initial_dict(target_state)
-            Q_target = self.network.compute_reaction_quotients(c_target)
-            x_target = np.log(Q_target) - self._lnKeq_consistent
-            y_target = self._B.T @ self._P @ x_target
-            return y_target
-        
         elif isinstance(target_state, np.ndarray):
-            if len(target_state) == self._rankS:
-                # Already in reduced coordinates
-                return target_state
-            elif len(target_state) == len(self.network.reaction_ids):
-                # Reaction quotients provided
-                x_target = np.log(target_state) - self._lnKeq_consistent
-                y_target = self._B.T @ self._P @ x_target
-                return y_target
-            elif len(target_state) == len(self.network.species_ids):
-                # Concentrations provided
-                Q_target = self.network.compute_reaction_quotients(target_state)
-                x_target = np.log(Q_target) - self._lnKeq_consistent
-                y_target = self._B.T @ self._P @ x_target
-                return y_target
-            else:
-                raise ValueError(f"Target state array has invalid length {len(target_state)}")
-        
+            if len(target_state) != len(self.network.species_ids):
+                raise ValueError(f"Target concentrations must have {len(self.network.species_ids)} "
+                               f"elements (one per species), got {len(target_state)}")
+            c_target = target_state
         else:
-            raise ValueError(f"Invalid target state type: {type(target_state)}")
+            raise ValueError("Target must be concentration dict, concentration array, or 'equilibrium'. "
+                           "Quotients and reduced states are not accepted - use concentrations.")
+        
+        # Validate conservation laws
+        is_valid, error_msg = self.validate_conservation_laws(c0, c_target)
+        if not is_valid:
+            raise ValueError(f"Target violates conservation laws.\n{error_msg}")
+        
+        # Convert concentrations to reduced state: c → Q → x → y
+        Q_target = self.network.compute_reaction_quotients(c_target)
+        x_target = np.log(Q_target) - self._lnKeq_consistent
+        y_target = self._B.T @ self._P @ x_target
+        
+        return y_target
     
     def _solve_linear_with_control(self, controller, y_target, u_ss, c0, t_eval,
                                   feedback_gain, disturbance_function, **kwargs):
