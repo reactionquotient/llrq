@@ -5,7 +5,7 @@ separated from the dynamics simulation.
 """
 
 import numpy as np
-from typing import Optional, Union, Callable, Tuple
+from typing import Optional, Union, Callable, Tuple, Dict, Any
 from .solver import LLRQSolver
 
 
@@ -278,3 +278,370 @@ def design_lqr_controller(solver: LLRQSolver, Q_weight: float = 1.0,
     K_lqr = np.linalg.inv(R_cost) @ B_ctrl.T @ P
     
     return K_lqr, P
+
+
+class ControlledSimulation:
+    """Unified interface for controlled simulations.
+    
+    This class provides a high-level API for running controlled simulations
+    that encapsulates the workflow from linear_vs_mass_action.py:
+    1. Setup reaction with initial concentrations
+    2. Choose target point
+    3. Compute static control input to reach target
+    4. Simulate controlled dynamics
+    """
+    
+    def __init__(self, solver, controller: Optional[LLRQController] = None):
+        """Initialize controlled simulation.
+        
+        Args:
+            solver: LLRQSolver instance
+            controller: LLRQController instance. If None, creates default controller.
+        """
+        self.solver = solver
+        self.controller = controller or LLRQController(solver)
+        self.network = solver.network
+        
+    @classmethod
+    def from_mass_action(cls, network, forward_rates, backward_rates, 
+                        initial_concentrations, controlled_reactions=None, **kwargs):
+        """Create controlled simulation from mass action parameters.
+        
+        Args:
+            network: ReactionNetwork
+            forward_rates: Forward rate constants
+            backward_rates: Backward rate constants  
+            initial_concentrations: Initial concentrations for equilibrium computation
+            controlled_reactions: List of reactions to control
+            **kwargs: Additional arguments passed to LLRQDynamics.from_mass_action
+            
+        Returns:
+            ControlledSimulation instance
+        """
+        from .llrq_dynamics import LLRQDynamics
+        from .solver import LLRQSolver
+        
+        # Create dynamics
+        dynamics = LLRQDynamics.from_mass_action(
+            network=network,
+            forward_rates=forward_rates,
+            backward_rates=backward_rates,
+            initial_concentrations=initial_concentrations,
+            **kwargs
+        )
+        
+        # Create solver and controller
+        solver = LLRQSolver(dynamics)
+        controller = LLRQController(solver, controlled_reactions)
+        
+        return cls(solver, controller)
+    
+    def simulate_to_target(self, 
+                          initial_concentrations: Union[Dict[str, float], np.ndarray],
+                          target_state: Union[Dict[str, float], np.ndarray, str],
+                          t_span: Union[Tuple[float, float], np.ndarray],
+                          method: str = 'auto',
+                          feedback_gain: float = 1.0,
+                          disturbance_function: Optional[Callable[[float], np.ndarray]] = None,
+                          **kwargs) -> Dict[str, Any]:
+        """Simulate controlled dynamics to reach target state.
+        
+        Args:
+            initial_concentrations: Initial species concentrations
+            target_state: Target as concentrations dict, reaction quotients, or 'equilibrium'
+            t_span: Time span for simulation
+            method: Simulation method ('auto', 'linear', 'mass_action')
+            feedback_gain: Proportional feedback gain
+            disturbance_function: Optional disturbance function f(t) -> disturbance
+            **kwargs: Additional simulation arguments
+            
+        Returns:
+            Simulation results dictionary
+        """
+        return self.solver.solve_with_control(
+            initial_conditions=initial_concentrations,
+            target_state=target_state,
+            t_span=t_span,
+            controlled_reactions=self.controller.controlled_reactions,
+            method=method,
+            feedback_gain=feedback_gain,
+            disturbance_function=disturbance_function,
+            **kwargs
+        )
+    
+    def compare_methods(self,
+                       initial_concentrations: Union[Dict[str, float], np.ndarray],
+                       target_state: Union[Dict[str, float], np.ndarray, str],
+                       t_span: Union[Tuple[float, float], np.ndarray],
+                       feedback_gain: float = 1.0,
+                       disturbance_function: Optional[Callable[[float], np.ndarray]] = None,
+                       **kwargs) -> Dict[str, Any]:
+        """Compare linear LLRQ vs mass action control performance.
+        
+        Args:
+            initial_concentrations: Initial species concentrations
+            target_state: Target state specification
+            t_span: Time span for simulation
+            feedback_gain: Proportional feedback gain
+            disturbance_function: Optional disturbance function f(t) -> disturbance
+            **kwargs: Additional simulation arguments
+            
+        Returns:
+            Dictionary with both 'linear_result' and 'mass_action_result' keys
+        """
+        return self.solver.solve_with_control(
+            initial_conditions=initial_concentrations,
+            target_state=target_state,
+            t_span=t_span,
+            controlled_reactions=self.controller.controlled_reactions,
+            compare_methods=True,
+            feedback_gain=feedback_gain,
+            disturbance_function=disturbance_function,
+            **kwargs
+        )
+    
+    def analyze_performance(self, result: Dict[str, Any], 
+                          target_state: Union[Dict[str, float], np.ndarray]) -> Dict[str, Any]:
+        """Analyze control performance metrics.
+        
+        Args:
+            result: Simulation result from simulate_to_target or compare_methods
+            target_state: Target state for comparison
+            
+        Returns:
+            Performance metrics dictionary
+        """
+        metrics = {}
+        
+        # Parse target state
+        if isinstance(target_state, dict):
+            c_target = self.solver._parse_initial_dict(target_state)
+            Q_target = self.network.compute_reaction_quotients(c_target)
+            y_target = self.controller.reaction_quotients_to_reduced_state(Q_target)
+        elif isinstance(target_state, np.ndarray):
+            if len(target_state) == self.solver._rankS:
+                y_target = target_state
+            else:
+                # Assume concentrations or reaction quotients
+                if len(target_state) == len(self.network.species_ids):
+                    Q_target = self.network.compute_reaction_quotients(target_state)
+                else:
+                    Q_target = target_state
+                y_target = self.controller.reaction_quotients_to_reduced_state(Q_target)
+        else:
+            raise ValueError("Cannot analyze performance for string target states")
+        
+        # Analyze single result
+        if 'linear_result' not in result and 'mass_action_result' not in result:
+            # Single simulation result
+            metrics = self._compute_single_performance(result, y_target)
+        else:
+            # Comparison results
+            if 'linear_result' in result:
+                metrics['linear'] = self._compute_single_performance(result['linear_result'], y_target)
+            if 'mass_action_result' in result:
+                metrics['mass_action'] = self._compute_single_performance(result['mass_action_result'], y_target)
+            
+            # Cross-comparison metrics
+            if 'linear_result' in result and 'mass_action_result' in result:
+                linear_final = result['linear_result']['reduced_state'][-1]
+                mass_action_final = result['mass_action_result']['reduced_state'][-1]
+                metrics['method_difference'] = {
+                    'final_state_error': float(np.linalg.norm(linear_final - mass_action_final)),
+                    'max_trajectory_difference': float(np.max(np.linalg.norm(
+                        result['linear_result']['reduced_state'] - 
+                        result['mass_action_result']['reduced_state'], axis=1
+                    )))
+                }
+        
+        return metrics
+    
+    def _compute_single_performance(self, result: Dict[str, Any], y_target: np.ndarray) -> Dict[str, Any]:
+        """Compute performance metrics for a single simulation result."""
+        y_traj = result['reduced_state']
+        
+        # Tracking errors
+        errors = np.linalg.norm(y_traj - y_target, axis=1)
+        
+        # Control effort
+        if 'control_inputs' in result:
+            control_effort = np.sum(np.abs(result['control_inputs']), axis=1)
+            total_control_effort = float(np.trapz(control_effort, result['time']))
+        else:
+            total_control_effort = None
+        
+        return {
+            'final_error': float(errors[-1]),
+            'max_error': float(np.max(errors)),
+            'rms_error': float(np.sqrt(np.mean(errors**2))),
+            'settling_time': self._compute_settling_time(result['time'], errors),
+            'total_control_effort': total_control_effort,
+            'steady_state_achieved': bool(errors[-1] < 0.05)  # 5% tolerance
+        }
+    
+    def _compute_settling_time(self, time: np.ndarray, errors: np.ndarray, 
+                              tolerance: float = 0.05) -> Optional[float]:
+        """Compute settling time (time to reach and stay within tolerance)."""
+        within_tolerance = errors <= tolerance
+        if not np.any(within_tolerance):
+            return None
+        
+        # Find last time point outside tolerance
+        last_violation_idx = None
+        for i in reversed(range(len(within_tolerance))):
+            if not within_tolerance[i]:
+                last_violation_idx = i
+                break
+        
+        if last_violation_idx is None:
+            # Always within tolerance
+            return float(time[0])
+        elif last_violation_idx == len(time) - 1:
+            # Never settled
+            return None
+        else:
+            return float(time[last_violation_idx + 1])
+    
+    def plot_comparison(self, comparison_result: Dict[str, Any], 
+                       target_state: Union[Dict[str, float], np.ndarray] = None,
+                       save_path: Optional[str] = None) -> Optional[str]:
+        """Plot comparison between linear and mass action results.
+        
+        Args:
+            comparison_result: Result from compare_methods()
+            target_state: Target state for reference lines
+            save_path: Optional path to save plot
+            
+        Returns:
+            Path to saved plot if save_path provided, None otherwise
+        """
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError:
+            raise ImportError("matplotlib required for plotting. Install with: pip install matplotlib")
+        
+        # Extract results
+        if 'linear_result' not in comparison_result or 'mass_action_result' not in comparison_result:
+            raise ValueError("comparison_result must contain both linear_result and mass_action_result")
+        
+        linear_result = comparison_result['linear_result']
+        mass_action_result = comparison_result['mass_action_result']
+        
+        # Create figure with subplots
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        fig.suptitle('Linear LLRQ vs Mass Action Control Comparison', fontsize=16)
+        
+        time = linear_result['time']
+        
+        # Plot 1: Reduced state trajectories
+        ax = axes[0, 0]
+        rankS = linear_result['reduced_state'].shape[1]
+        for i in range(min(rankS, 2)):  # Plot first two components
+            ax.plot(time, linear_result['reduced_state'][:, i], 
+                   'b-', linewidth=2, label=f'Linear y{i+1}' if i == 0 else '')
+            ax.plot(time, mass_action_result['reduced_state'][:, i], 
+                   'r--', linewidth=2, label=f'Mass Action y{i+1}' if i == 0 else '')
+        
+        # Target reference if provided
+        if target_state is not None:
+            try:
+                y_target = self._parse_target_for_plotting(target_state)
+                for i in range(min(len(y_target), 2)):
+                    ax.axhline(y_target[i], color='k', linestyle=':', alpha=0.7, 
+                              label='Target' if i == 0 else '')
+            except:
+                pass  # Skip target plotting if parsing fails
+        
+        ax.set_xlabel('Time')
+        ax.set_ylabel('Reduced State')
+        ax.set_title('Reduced State Trajectories')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        
+        # Plot 2: Concentration trajectories (first 3 species)
+        ax = axes[0, 1]
+        n_species_plot = min(3, len(self.network.species_ids))
+        colors = ['blue', 'green', 'orange']
+        for i in range(n_species_plot):
+            species_id = self.network.species_ids[i]
+            ax.plot(time, linear_result['concentrations'][:, i], 
+                   '-', color=colors[i], linewidth=2, label=f'Linear [{species_id}]')
+            ax.plot(time, mass_action_result['concentrations'][:, i], 
+                   '--', color=colors[i], linewidth=2, label=f'Mass Action [{species_id}]')
+        
+        ax.set_xlabel('Time')
+        ax.set_ylabel('Concentration')
+        ax.set_title('Species Concentrations')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        
+        # Plot 3: Control inputs (if available)
+        ax = axes[1, 0]
+        if 'control_inputs' in linear_result and 'control_inputs' in mass_action_result:
+            n_controls = min(2, linear_result['control_inputs'].shape[1])
+            for i in range(n_controls):
+                reaction_id = self.controller.controlled_reactions[i]
+                if isinstance(reaction_id, int):
+                    reaction_id = self.network.reaction_ids[reaction_id]
+                ax.plot(time, linear_result['control_inputs'][:, i], 
+                       'b-', linewidth=2, label=f'Linear {reaction_id}' if i == 0 else '')
+                ax.plot(time, mass_action_result['control_inputs'][:, i], 
+                       'r--', linewidth=2, label=f'Mass Action {reaction_id}' if i == 0 else '')
+            ax.set_ylabel('Control Input')
+            ax.legend()
+        else:
+            ax.text(0.5, 0.5, 'Control inputs not available', 
+                   ha='center', va='center', transform=ax.transAxes)
+        
+        ax.set_xlabel('Time')
+        ax.set_title('Control Signals')
+        ax.grid(True, alpha=0.3)
+        
+        # Plot 4: Error comparison
+        ax = axes[1, 1]
+        if target_state is not None:
+            try:
+                y_target = self._parse_target_for_plotting(target_state)
+                linear_errors = np.linalg.norm(linear_result['reduced_state'] - y_target, axis=1)
+                mass_action_errors = np.linalg.norm(mass_action_result['reduced_state'] - y_target, axis=1)
+                
+                ax.plot(time, linear_errors, 'b-', linewidth=2, label='Linear LLRQ')
+                ax.plot(time, mass_action_errors, 'r--', linewidth=2, label='Mass Action')
+                ax.set_ylabel('Tracking Error')
+                ax.legend()
+            except:
+                ax.text(0.5, 0.5, 'Error computation failed', 
+                       ha='center', va='center', transform=ax.transAxes)
+        else:
+            ax.text(0.5, 0.5, 'No target state provided', 
+                   ha='center', va='center', transform=ax.transAxes)
+        
+        ax.set_xlabel('Time')
+        ax.set_title('Tracking Error')
+        ax.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        
+        if save_path:
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            plt.close()
+            return save_path
+        else:
+            plt.show()
+            return None
+    
+    def _parse_target_for_plotting(self, target_state):
+        """Parse target state for plotting purposes."""
+        if isinstance(target_state, dict):
+            c_target = self.solver._parse_initial_dict(target_state)
+            Q_target = self.network.compute_reaction_quotients(c_target)
+            return self.controller.reaction_quotients_to_reduced_state(Q_target)
+        elif isinstance(target_state, np.ndarray):
+            if len(target_state) == self.solver._rankS:
+                return target_state
+            elif len(target_state) == len(self.network.species_ids):
+                Q_target = self.network.compute_reaction_quotients(target_state)
+                return self.controller.reaction_quotients_to_reduced_state(Q_target)
+            elif len(target_state) == len(self.network.reaction_ids):
+                return self.controller.reaction_quotients_to_reduced_state(target_state)
+        raise ValueError("Cannot parse target state for plotting")

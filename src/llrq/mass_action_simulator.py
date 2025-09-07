@@ -10,7 +10,7 @@ to mass action rate modifications via asymmetric rate shifts.
 
 import numpy as np
 import warnings
-from typing import Dict, List, Optional, Union, Callable, Tuple
+from typing import Dict, List, Optional, Union, Callable, Tuple, Any
 try:
     import tellurium as te
     HAS_TELLURIUM = True
@@ -54,6 +54,65 @@ class MassActionSimulator:
         self._kf_base = None
         self._kr_base = None
         self._build_model()
+    
+    @classmethod
+    def from_llrq_dynamics(cls, dynamics, network: Optional[ReactionNetwork] = None):
+        """Create MassActionSimulator from LLRQDynamics with automatic rate extraction.
+        
+        This method extracts rate constants from an LLRQDynamics object that was
+        created using from_mass_action(), enabling seamless transition from
+        LLRQ dynamics to mass action simulation.
+        
+        Args:
+            dynamics: LLRQDynamics object created with from_mass_action()
+            network: ReactionNetwork object. If None, uses dynamics.network
+            
+        Returns:
+            MassActionSimulator instance configured with the same rate constants
+            
+        Raises:
+            ValueError: If dynamics was not created from mass action data
+        """
+        if network is None:
+            network = dynamics.network
+        
+        # Extract mass action information
+        mass_action_info = dynamics.get_mass_action_info()
+        if mass_action_info is None:
+            raise ValueError("LLRQDynamics object was not created from mass action data. "
+                           "Use LLRQDynamics.from_mass_action() to create dynamics with "
+                           "extractable rate constants.")
+        
+        # Extract rate constants
+        forward_rates = mass_action_info['forward_rates']
+        backward_rates = mass_action_info['backward_rates']
+        
+        rate_constants = {}
+        for i, rid in enumerate(network.reaction_ids):
+            rate_constants[rid] = (forward_rates[i], backward_rates[i])
+        
+        # Create solver to get LLRQ matrices
+        from .solver import LLRQSolver
+        solver = LLRQSolver(dynamics)
+        
+        # Extract LLRQ control matrices
+        B = solver._B
+        K_red = B.T @ dynamics.K @ B
+        lnKeq_consistent = solver._lnKeq_consistent
+        
+        return cls(network, rate_constants, B, K_red, lnKeq_consistent)
+    
+    @classmethod  
+    def from_controlled_simulation(cls, controlled_sim):
+        """Create MassActionSimulator from ControlledSimulation object.
+        
+        Args:
+            controlled_sim: ControlledSimulation instance
+            
+        Returns:
+            MassActionSimulator instance
+        """
+        return cls.from_llrq_dynamics(controlled_sim.solver.dynamics, controlled_sim.network)
     
     def _default_rate_constants(self) -> Dict:
         """Generate default rate constants for all reactions."""
@@ -343,3 +402,79 @@ class MassActionSimulator:
         except Exception as e:
             warnings.warn(f"Failed to apply state disturbance: {e}. Disturbance ignored.")
             return
+    
+    def simulate_with_controller(self,
+                               controller, 
+                               target_state: Union[np.ndarray, Dict[str, float]],
+                               t_span: Union[Tuple[float, float], np.ndarray],
+                               feedback_gain: float = 1.0,
+                               disturbance_function: Optional[Callable[[float], np.ndarray]] = None,
+                               **kwargs) -> Dict[str, Any]:
+        """Simulate using LLRQController directly.
+        
+        This method provides a convenient interface for mass action simulation
+        with LLRQ control, automatically handling the control function setup.
+        
+        Args:
+            controller: LLRQController instance
+            target_state: Target as concentrations dict or reduced state array
+            t_span: Time span as tuple or array of time points
+            feedback_gain: Proportional feedback gain
+            disturbance_function: Optional disturbance function f(t) -> disturbance
+            **kwargs: Additional simulation arguments
+            
+        Returns:
+            Simulation results dictionary
+        """
+        # Parse time span
+        if isinstance(t_span, tuple):
+            t_eval = np.linspace(t_span[0], t_span[1], kwargs.get('n_points', 1000))
+        else:
+            t_eval = np.array(t_span)
+        
+        # Parse target state
+        if isinstance(target_state, dict):
+            c_target = controller.solver._parse_initial_dict(target_state)
+            Q_target = self.network.compute_reaction_quotients(c_target)
+            y_target = controller.reaction_quotients_to_reduced_state(Q_target)
+        elif isinstance(target_state, np.ndarray):
+            if len(target_state) == controller.solver._rankS:
+                y_target = target_state
+            elif len(target_state) == len(self.network.species_ids):
+                Q_target = self.network.compute_reaction_quotients(target_state)
+                y_target = controller.reaction_quotients_to_reduced_state(Q_target)
+            elif len(target_state) == len(self.network.reaction_ids):
+                y_target = controller.reaction_quotients_to_reduced_state(target_state)
+            else:
+                raise ValueError(f"Invalid target_state array length: {len(target_state)}")
+        else:
+            raise ValueError(f"Invalid target_state type: {type(target_state)}")
+        
+        # Compute steady-state control
+        u_ss = controller.compute_steady_state_control(y_target)
+        
+        # Define control function
+        def control_function(t, Q_current):
+            y_current = controller.reaction_quotients_to_reduced_state(Q_current)
+            u = u_ss + feedback_gain * (y_target - y_current)
+            
+            # Convert to reduced control
+            u_red = controller.B_red @ u
+            return u_red, u
+        
+        # Simulate
+        result = self.simulate(
+            t_eval,
+            control_function,
+            disturbance_function=disturbance_function
+        )
+        
+        # Add target and controller information
+        result.update({
+            'target_state': y_target,
+            'steady_state_control': u_ss,
+            'controller': controller,
+            'feedback_gain': feedback_gain
+        })
+        
+        return result

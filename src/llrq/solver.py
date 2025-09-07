@@ -423,4 +423,284 @@ class LLRQSolver:
             'success': bool(sol.success),
             'message': "Closed-loop simulation complete" if sol.success else f"Integration failed: {sol.message}",
         }
+    
+    def solve_with_control(self,
+                          initial_conditions: Union[np.ndarray, Dict[str, float]],
+                          target_state: Union[np.ndarray, Dict[str, float], str],
+                          t_span: Union[Tuple[float, float], np.ndarray],
+                          controlled_reactions: Optional[list] = None,
+                          method: str = 'auto',
+                          use_mass_action: bool = False,
+                          compare_methods: bool = False,
+                          feedback_gain: float = 1.0,
+                          disturbance_function: Optional[Callable[[float], np.ndarray]] = None,
+                          **kwargs) -> Dict[str, Any]:
+        """Solve dynamics with automatic control to reach target state.
+        
+        This is the main entry point for controlled simulations, implementing
+        the core workflow: setup -> target -> control -> simulate.
+        
+        Args:
+            initial_conditions: Initial concentrations or reaction quotients
+            target_state: Target as concentrations dict, reaction quotients array, 
+                         or 'equilibrium' for automatic equilibrium target
+            t_span: Time span as (t0, tf) or array of time points
+            controlled_reactions: List of reaction IDs/indices to control.
+                                If None, uses all reactions
+            method: Simulation method ('auto', 'linear', 'mass_action')
+            use_mass_action: If True, use mass action simulation
+            compare_methods: If True, return both linear and mass action results
+            feedback_gain: Proportional feedback gain for control
+            disturbance_function: Function f(t) -> disturbance for testing robustness
+            **kwargs: Additional arguments passed to simulation methods
+            
+        Returns:
+            Dictionary containing solution results. If compare_methods=True,
+            contains both 'linear_result' and 'mass_action_result' keys.
+        """
+        from .control import LLRQController
+        
+        # Parse initial conditions
+        if isinstance(initial_conditions, dict):
+            c0 = self._parse_initial_dict(initial_conditions)
+        else:
+            c0 = np.array(initial_conditions)
+            
+        # Create controller
+        controller = LLRQController(self, controlled_reactions)
+        
+        # Parse target state
+        y_target = self._parse_target_state(target_state, c0)
+        
+        # Compute steady-state control
+        u_ss = controller.compute_steady_state_control(y_target)
+        
+        # Parse time span
+        if isinstance(t_span, tuple):
+            t_eval = np.linspace(t_span[0], t_span[1], kwargs.get('n_points', 1000))
+        else:
+            t_eval = np.array(t_span)
+        
+        results = {}
+        
+        # Determine simulation methods to use
+        methods_to_run = []
+        if compare_methods:
+            methods_to_run = ['linear', 'mass_action']
+        elif method == 'auto':
+            # Auto-select based on system size and mass action availability
+            if use_mass_action:
+                try:
+                    from .mass_action_simulator import MassActionSimulator
+                    methods_to_run = ['mass_action']
+                except ImportError:
+                    methods_to_run = ['linear']
+            else:
+                methods_to_run = ['linear']
+        elif method in ['linear', 'mass_action']:
+            methods_to_run = [method]
+        else:
+            raise ValueError(f"Invalid method '{method}'. Use 'auto', 'linear', or 'mass_action'")
+        
+        # Run simulations
+        for sim_method in methods_to_run:
+            if sim_method == 'linear':
+                result = self._solve_linear_with_control(
+                    controller, y_target, u_ss, c0, t_eval, 
+                    feedback_gain, disturbance_function, **kwargs
+                )
+                result['method'] = 'Linear LLRQ'
+                
+            elif sim_method == 'mass_action':
+                result = self._solve_mass_action_with_control(
+                    controller, y_target, u_ss, c0, t_eval,
+                    feedback_gain, disturbance_function, **kwargs
+                )
+                result['method'] = 'Mass Action'
+            
+            # Store result
+            if compare_methods:
+                results[f'{sim_method}_result'] = result
+            else:
+                results = result
+        
+        # Add control information
+        if compare_methods:
+            results['control_info'] = {
+                'controller': controller,
+                'target_state': y_target,
+                'steady_state_control': u_ss,
+                'controlled_reactions': controller.controlled_reactions
+            }
+        else:
+            results.update({
+                'controller': controller,
+                'target_state': y_target,
+                'steady_state_control': u_ss,
+                'controlled_reactions': controller.controlled_reactions
+            })
+        
+        return results
+    
+    def _parse_target_state(self, target_state, c0: np.ndarray) -> np.ndarray:
+        """Parse target state into reduced state coordinates."""
+        if isinstance(target_state, str):
+            if target_state == 'equilibrium':
+                # Use current equilibrium as target
+                Q_eq = self._Keq_consistent
+                x_eq = np.log(Q_eq) - self._lnKeq_consistent  # Should be ~0
+                y_eq = self._B.T @ self._P @ x_eq
+                return y_eq
+            else:
+                raise ValueError(f"Unknown target state '{target_state}'")
+        
+        elif isinstance(target_state, dict):
+            # Target concentrations provided
+            c_target = self._parse_initial_dict(target_state)
+            Q_target = self.network.compute_reaction_quotients(c_target)
+            x_target = np.log(Q_target) - self._lnKeq_consistent
+            y_target = self._B.T @ self._P @ x_target
+            return y_target
+        
+        elif isinstance(target_state, np.ndarray):
+            if len(target_state) == self._rankS:
+                # Already in reduced coordinates
+                return target_state
+            elif len(target_state) == len(self.network.reaction_ids):
+                # Reaction quotients provided
+                x_target = np.log(target_state) - self._lnKeq_consistent
+                y_target = self._B.T @ self._P @ x_target
+                return y_target
+            elif len(target_state) == len(self.network.species_ids):
+                # Concentrations provided
+                Q_target = self.network.compute_reaction_quotients(target_state)
+                x_target = np.log(Q_target) - self._lnKeq_consistent
+                y_target = self._B.T @ self._P @ x_target
+                return y_target
+            else:
+                raise ValueError(f"Target state array has invalid length {len(target_state)}")
+        
+        else:
+            raise ValueError(f"Invalid target state type: {type(target_state)}")
+    
+    def _solve_linear_with_control(self, controller, y_target, u_ss, c0, t_eval,
+                                  feedback_gain, disturbance_function, **kwargs):
+        """Solve using linear LLRQ dynamics with control."""
+        dt = t_eval[1] - t_eval[0] if len(t_eval) > 1 else 0.01
+        n = len(t_eval)
+        
+        # Get system matrices
+        A = controller.A  # -K_red
+        B_red = controller.B_red
+        
+        # Initial state
+        Q0 = self.network.compute_reaction_quotients(c0)
+        y0 = controller.reaction_quotients_to_reduced_state(Q0)
+        
+        # Storage
+        Y = np.zeros((n, len(y0)))
+        U = np.zeros((n, len(controller.controlled_reactions)))
+        Q_traj = np.zeros((n, len(self.network.reaction_ids)))
+        
+        y = y0.copy()
+        
+        # Simulate
+        for i, t in enumerate(t_eval):
+            # Control (feedforward + feedback)
+            u = u_ss + feedback_gain * (y_target - y)
+            
+            # Disturbance
+            d = disturbance_function(t) if disturbance_function else np.zeros_like(y)
+            
+            # Dynamics
+            u_red = B_red @ u
+            ydot = A @ y + u_red + d
+            
+            # Store
+            Y[i] = y
+            U[i] = u
+            Q_traj[i] = controller.reduced_state_to_reaction_quotients(y)
+            
+            # Integrate
+            if i < n - 1:
+                y = y + dt * ydot
+        
+        # Compute concentrations
+        C_traj = np.zeros((n, len(self.network.species_ids)))
+        for i in range(n):
+            C_traj[i] = self._compute_concentrations_from_reduced(
+                Q_traj[i:i+1], c0, enforce_conservation=True
+            )
+        
+        return {
+            'time': t_eval,
+            'concentrations': C_traj,
+            'reaction_quotients': Q_traj,
+            'reduced_state': Y,
+            'control_inputs': U,
+            'success': True,
+            'message': "Linear LLRQ controlled simulation completed"
+        }
+    
+    def _solve_mass_action_with_control(self, controller, y_target, u_ss, c0, t_eval,
+                                       feedback_gain, disturbance_function, **kwargs):
+        """Solve using mass action dynamics with control."""
+        try:
+            from .mass_action_simulator import MassActionSimulator
+        except ImportError:
+            raise ImportError("Mass action simulation requires tellurium. "
+                            "Install with: pip install tellurium")
+        
+        # Get rate constants from dynamics if available
+        mass_action_info = self.dynamics.get_mass_action_info()
+        if mass_action_info:
+            rate_constants = {}
+            for i, rid in enumerate(self.network.reaction_ids):
+                kf = mass_action_info['forward_rates'][i]
+                kr = mass_action_info['backward_rates'][i]
+                rate_constants[rid] = (kf, kr)
+        else:
+            # Use default rate constants
+            rate_constants = None
+        
+        # Create simulator
+        K_red = self._B.T @ self.dynamics.K @ self._B
+        sim = MassActionSimulator(
+            self.network, rate_constants,
+            B=self._B, K_red=K_red, lnKeq_consistent=self._lnKeq_consistent
+        )
+        
+        # Define control function
+        def control_function(t, Q_current):
+            y_current = controller.reaction_quotients_to_reduced_state(Q_current)
+            u = u_ss + feedback_gain * (y_target - y_current)
+            
+            # Convert to reduced control
+            u_red = controller.B_red @ u
+            return u_red, u
+        
+        # Define disturbance function for mass action
+        def mass_action_disturbance(t):
+            if disturbance_function:
+                return disturbance_function(t)
+            else:
+                return np.zeros(self._rankS)
+        
+        # Simulate
+        result = sim.simulate(
+            t_eval, 
+            control_function,
+            disturbance_function=mass_action_disturbance
+        )
+        
+        # Add reduced state trajectory
+        n = len(t_eval)
+        Y = np.zeros((n, self._rankS))
+        for i in range(n):
+            Y[i] = controller.reaction_quotients_to_reduced_state(
+                result['reaction_quotients'][i]
+            )
+        result['reduced_state'] = Y
+        
+        return result
 

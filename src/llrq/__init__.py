@@ -22,7 +22,7 @@ from .solver import LLRQSolver
 from .visualization import LLRQVisualizer
 
 # Control and simulation
-from .control import LLRQController, AdaptiveController, design_lqr_controller
+from .control import LLRQController, AdaptiveController, design_lqr_controller, ControlledSimulation
 try:
     from .mass_action_simulator import MassActionSimulator
 except ImportError:
@@ -126,6 +126,167 @@ def simple_reaction(reactant_species: str = "A",
     
     return network, dynamics, solver, visualizer
 
+
+def simulate_to_target(network_or_dynamics,
+                      initial_concentrations: dict,
+                      target_concentrations: dict,
+                      controlled_reactions=None,
+                      t_span=(0, 100),
+                      method='auto',
+                      feedback_gain=1.0,
+                      **kwargs):
+    """One-line controlled simulation to target concentrations.
+    
+    This function implements the core workflow from linear_vs_mass_action.py:
+    1. Setup reaction with initial concentrations
+    2. Choose target point  
+    3. Compute static control input to reach target
+    4. Simulate controlled dynamics
+    
+    Args:
+        network_or_dynamics: ReactionNetwork or LLRQDynamics object
+        initial_concentrations: Initial species concentrations
+        target_concentrations: Target species concentrations
+        controlled_reactions: List of reactions to control. If None, uses all reactions
+        t_span: Time span for simulation
+        method: Simulation method ('auto', 'linear', 'mass_action')
+        feedback_gain: Proportional feedback gain
+        **kwargs: Additional arguments passed to solve_with_control
+        
+    Returns:
+        Simulation results dictionary
+    """
+    # Handle both network and dynamics inputs
+    if hasattr(network_or_dynamics, 'network'):
+        # LLRQDynamics object
+        dynamics = network_or_dynamics
+        network = dynamics.network
+    else:
+        # ReactionNetwork object - need to create dynamics
+        network = network_or_dynamics
+        # Create dynamics using automatic equilibrium computation
+        dynamics = LLRQDynamics.from_mass_action(
+            network=network,
+            # Use default rates that will be reasonable
+            forward_rates=kwargs.get('forward_rates', None),
+            backward_rates=kwargs.get('backward_rates', None),
+            initial_concentrations=list(initial_concentrations.values()),
+            **{k:v for k,v in kwargs.items() if k not in ['forward_rates', 'backward_rates']}
+        )
+    
+    # Create solver
+    solver = LLRQSolver(dynamics)
+    
+    # Run controlled simulation
+    result = solver.solve_with_control(
+        initial_conditions=initial_concentrations,
+        target_state=target_concentrations,
+        t_span=t_span,
+        controlled_reactions=controlled_reactions,
+        method=method,
+        feedback_gain=feedback_gain,
+        **kwargs
+    )
+    
+    return result
+
+
+def compare_control_methods(network_or_dynamics,
+                          initial_concentrations: dict,
+                          target_concentrations: dict, 
+                          controlled_reactions=None,
+                          t_span=(0, 100),
+                          feedback_gain=1.0,
+                          **kwargs):
+    """Compare linear LLRQ vs mass action control performance.
+    
+    Args:
+        network_or_dynamics: ReactionNetwork or LLRQDynamics object
+        initial_concentrations: Initial species concentrations
+        target_concentrations: Target species concentrations
+        controlled_reactions: List of reactions to control
+        t_span: Time span for simulation
+        feedback_gain: Proportional feedback gain
+        **kwargs: Additional simulation arguments
+        
+    Returns:
+        Dictionary with 'linear_result', 'mass_action_result', and 'control_info' keys
+    """
+    # Handle both network and dynamics inputs
+    if hasattr(network_or_dynamics, 'network'):
+        dynamics = network_or_dynamics
+        network = dynamics.network
+    else:
+        network = network_or_dynamics
+        dynamics = LLRQDynamics.from_mass_action(
+            network=network,
+            forward_rates=kwargs.get('forward_rates', None),
+            backward_rates=kwargs.get('backward_rates', None),
+            initial_concentrations=list(initial_concentrations.values()),
+            **{k:v for k,v in kwargs.items() if k not in ['forward_rates', 'backward_rates']}
+        )
+    
+    # Create solver
+    solver = LLRQSolver(dynamics)
+    
+    # Run comparison
+    result = solver.solve_with_control(
+        initial_conditions=initial_concentrations,
+        target_state=target_concentrations,
+        t_span=t_span,
+        controlled_reactions=controlled_reactions,
+        compare_methods=True,
+        feedback_gain=feedback_gain,
+        **kwargs
+    )
+    
+    return result
+
+
+def create_controlled_simulation(network_or_dynamics, 
+                                controlled_reactions=None,
+                                forward_rates=None,
+                                backward_rates=None,
+                                initial_concentrations=None):
+    """Create a ControlledSimulation object for advanced controlled simulation workflows.
+    
+    Args:
+        network_or_dynamics: ReactionNetwork or LLRQDynamics object
+        controlled_reactions: List of reactions to control
+        forward_rates: Forward rate constants (if creating from network)
+        backward_rates: Backward rate constants (if creating from network)  
+        initial_concentrations: Initial concentrations for equilibrium computation
+        
+    Returns:
+        ControlledSimulation instance
+    """
+    from .control import ControlledSimulation
+    
+    # Handle both network and dynamics inputs
+    if hasattr(network_or_dynamics, 'network'):
+        # LLRQDynamics object
+        dynamics = network_or_dynamics
+        solver = LLRQSolver(dynamics)
+    else:
+        # ReactionNetwork object
+        network = network_or_dynamics
+        if forward_rates is None or backward_rates is None or initial_concentrations is None:
+            raise ValueError("forward_rates, backward_rates, and initial_concentrations "
+                           "are required when creating from ReactionNetwork")
+        
+        return ControlledSimulation.from_mass_action(
+            network=network,
+            forward_rates=forward_rates,
+            backward_rates=backward_rates,
+            initial_concentrations=initial_concentrations,
+            controlled_reactions=controlled_reactions
+        )
+    
+    # Create from dynamics
+    from .control import LLRQController
+    controller = LLRQController(solver, controlled_reactions)
+    return ControlledSimulation(solver, controller)
+
 # Package metadata
 __all__ = [
     # Core classes
@@ -140,9 +301,13 @@ __all__ = [
     'LLRQController',
     'AdaptiveController', 
     'design_lqr_controller',
+    'ControlledSimulation',
     'MassActionSimulator',  # May not be available
     
     # Convenience functions
     'from_sbml',
-    'simple_reaction'
+    'simple_reaction',
+    'simulate_to_target',
+    'compare_control_methods',
+    'create_controlled_simulation'
 ]
