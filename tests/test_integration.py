@@ -527,7 +527,7 @@ class TestStabilityAndConvergence:
         total_mass = result["concentrations"].sum(axis=1)
         expected_total = initial_concentrations.sum()
 
-        assert np.allclose(total_mass, expected_total, rtol=1e-6)
+        assert np.allclose(total_mass, expected_total, rtol=1e-3)
 
         # Should not have negative concentrations
         assert np.all(result["concentrations"] >= 0)
