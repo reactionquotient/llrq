@@ -36,6 +36,7 @@ Where Q is reaction quotients, K is relaxation rate matrix, Keq is equilibrium c
 - **`control/lqr.py`**: Linear Quadratic Regulator design functions
 
 #### Advanced Features
+- **`thermodynamic_accounting.py`**: `ThermodynamicAccountant` class - entropy production calculations from reaction forces and external drives with energy balance diagnostics
 - **`estimation/kalman.py`**: Kalman filter for state estimation in noisy LLRQ systems
 - **`integrations/mass_action_drive.py`**: Integration with mass action kinetics for external drives
 - **`ops/ltisolve.py`**: Linear time-invariant system solution utilities
@@ -57,27 +58,27 @@ Where Q is reaction quotients, K is relaxation rate matrix, Keq is equilibrium c
 
 ```
 ReactionNetwork ──→ LLRQDynamics ──→ LLRQSolver ──→ Results
-     ↓                   ↓              ↓
-SBMLParser         Controllers    Visualizer
-                      ↓
-            FrequencySpaceController
-            LLRQController
+     ↓                   ↓              ↓            ↓
+SBMLParser         Controllers    Visualizer  ThermodynamicAccountant
+                      ↓                            ↑
+            FrequencySpaceController               │
+            LLRQController ─────────────────────────┘
             AdaptiveController
 ```
 
 ## Testing & Examples
 
-### Test Suite (`tests/`, 16 files)
+### Test Suite (`tests/`, 17 files)
 - **Core Tests**: `test_reaction_network.py`, `test_llrq_dynamics.py`, `test_solver.py`
 - **Integration Tests**: `test_mass_action.py`, `test_api_integration.py`, `test_integration.py`
 - **Control Tests**: `test_mass_action_control.py`, `test_frequency_control.py`
-- **Specialized Tests**: `test_sbml_parser.py`, `test_thermodynamic_accounting.py`, `test_performance.py`
+- **Specialized Tests**: `test_sbml_parser.py`, `test_thermodynamic_accounting.py`, `test_thermodynamic_accounting_entropy.py`, `test_performance.py`
 - **Edge Cases**: `test_edge_cases.py`, `test_time_varying_drives.py`
 
-### Examples (`examples/`, 20+ files)
+### Examples (`examples/`, 21+ files)
 - **Basic Usage**: `linear_vs_mass_action_simple.py`, `mass_action_example.py`
 - **Control Examples**: `lqr_complete_example.py`, `frequency_space_control.py`, `cycle_closed_loop.py`
-- **Advanced Features**: `example_thermodynamic_accounting.py`, `integrated_control_demo.py`
+- **Advanced Features**: `example_thermodynamic_accounting.py`, `entropy_production_demo.py`, `integrated_control_demo.py`
 
 ## Key Features by Module
 
@@ -86,6 +87,7 @@ SBMLParser         Controllers    Visualizer
 - **Numerical Integration**: Robust ODE solving with conservation enforcement
 - **Mass Action Comparison**: Switch between LLRQ approximation and true kinetics
 - **Conservation Laws**: Automatic detection and enforcement of stoichiometric constraints
+- **Entropy Production**: Optional entropy accounting during simulation with `compute_entropy=True`
 
 ### Control Systems
 - **LQR Control**: Optimal control for linear LLRQ systems
@@ -98,6 +100,13 @@ SBMLParser         Controllers    Visualizer
 - **Phase Portraits**: State space trajectories
 - **Frequency Response**: Bode plots and Nyquist diagrams
 - **Control Analysis**: Control effort and tracking performance
+
+### Thermodynamic Accounting
+- **Entropy from Reaction Forces**: Compute entropy production from x(t) = ln(Q/Keq) trajectories
+- **Quasi-Steady Approximation**: Entropy estimation from external drives u(t) when x ≈ K^{-1}u
+- **Energy Balance Diagnostics**: Power balance checks for model validation and noise assessment
+- **Dual Accounting**: Compare entropy estimates from reaction forces vs external drives
+- **Onsager Integration**: Seamless integration with existing Onsager conductance calculations
 
 ## Development Guidelines
 
