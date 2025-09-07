@@ -25,6 +25,7 @@ from .reaction_network import ReactionNetwork
 # Core imports
 from .sbml_parser import SBMLParseError, SBMLParser
 from .solver import LLRQSolver
+from .thermodynamic_accounting import ThermodynamicAccountant, AccountingResult, DualAccountingResult
 from .visualization import LLRQVisualizer
 
 try:
@@ -308,6 +309,10 @@ __all__ = [
     "LLRQDynamics",
     "LLRQSolver",
     "LLRQVisualizer",
+    # Thermodynamic accounting
+    "ThermodynamicAccountant",
+    "AccountingResult",
+    "DualAccountingResult",
     # Control and simulation
     "LLRQController",
     "AdaptiveController",

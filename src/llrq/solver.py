@@ -67,6 +67,7 @@ class LLRQSolver:
         t_span: Union[Tuple[float, float], np.ndarray],
         method: str = "auto",
         enforce_conservation: bool = True,
+        compute_entropy: bool = False,
         **kwargs,
     ) -> Dict[str, Any]:
         """Solve the log-linear dynamics system.
@@ -76,10 +77,11 @@ class LLRQSolver:
             t_span: Time span as (t0, tf) or array of time points
             method: Solution method ('auto', 'analytical', 'numerical')
             enforce_conservation: Whether to enforce conservation laws
+            compute_entropy: Whether to compute entropy production (requires mass action data)
             **kwargs: Additional arguments passed to numerical solver
 
         Returns:
-            Dictionary containing solution results
+            Dictionary containing solution results and optionally entropy accounting
         """
         # Parse initial conditions
         if isinstance(initial_conditions, dict):
@@ -157,7 +159,8 @@ class LLRQSolver:
         # Compute concentrations (square system: conservation + reduced quotient constraints)
         c_t = self._compute_concentrations_from_reduced(Q_t, c0, enforce_conservation)
 
-        return {
+        # Prepare results dictionary
+        results = {
             "time": t_eval,
             "concentrations": c_t,
             "reaction_quotients": Q_t,
@@ -167,6 +170,14 @@ class LLRQSolver:
             "message": message,
             "method": method,
         }
+
+        # Compute entropy production if requested
+        if compute_entropy:
+            entropy_result = self._compute_entropy_production(t_eval, x_t, u_full, K, c0, kwargs.get("entropy_scale", 1.0))
+            if entropy_result is not None:
+                results["entropy_accounting"] = entropy_result
+
+        return results
 
     def _parse_initial_dict(self, init_dict: Dict[str, float]) -> np.ndarray:
         """Parse initial conditions from dictionary."""
@@ -187,6 +198,56 @@ class LLRQSolver:
                 c0[i] = self.network.species_info[species_id].get("initial_concentration", 0.0)
 
         return c0
+
+    def _compute_entropy_production(
+        self, t: np.ndarray, x_t: np.ndarray, u_full_func: Callable, K: np.ndarray, c0: np.ndarray, scale: float = 1.0
+    ) -> Optional[Any]:
+        """Compute entropy production from solution trajectory.
+
+        Args:
+            t: Time points
+            x_t: Log deviation trajectory
+            u_full_func: External drive function
+            K: Relaxation matrix
+            c0: Initial concentrations
+            scale: Physical scale factor
+
+        Returns:
+            Entropy accounting result or None if not available
+        """
+        try:
+            # Check if we have mass action data for Onsager conductance
+            if not hasattr(self.dynamics, "_forward_rates") or self.dynamics._forward_rates is None:
+                warnings.warn("Entropy computation requires mass action data (forward/backward rates)")
+                return None
+
+            from .thermodynamic_accounting import ThermodynamicAccountant
+
+            # Create accountant and compute Onsager conductance
+            accountant = ThermodynamicAccountant(self.network)
+            forward_rates = self.dynamics._forward_rates
+            backward_rates = self.dynamics._backward_rates
+
+            # Use initial concentrations for Onsager computation (could be improved)
+            L = accountant.compute_onsager_conductance(c0, forward_rates, backward_rates)
+
+            # Compute external drive trajectory
+            u_t = np.array([u_full_func(t_i) for t_i in t])
+
+            # Compute entropy from both reaction forces and drives
+            if u_t.shape[1] > 0 and not np.allclose(u_t, 0):
+                # Have non-zero drives, do dual accounting
+                return accountant.entropy_from_xu(t, x_t, u_t, K, L, scale=scale)
+            else:
+                # Only reaction forces available
+                return accountant.entropy_from_x(t, x_t, L, scale=scale)
+
+        except ImportError:
+            warnings.warn("Thermodynamic accounting module not available")
+            return None
+        except Exception as e:
+            warnings.warn(f"Entropy computation failed: {e}")
+            return None
 
     def _choose_method(self) -> str:
         """Automatically choose solution method based on system properties."""
