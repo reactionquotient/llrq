@@ -363,24 +363,19 @@ class ThermodynamicAccountant:
             L = self.L
 
         N, m = u_t.shape
-        U = np.fft.fft(u_t, axis=0)  # (N, m)
-        w = self._freqs(N, dt)  # (N,)
+        U = np.fft.fft(u_t, axis=0)
+        w = self._freqs(N, dt)
 
         Sigma_bins = np.empty(N, dtype=float)
+        Ls = 0.5 * (L + L.T)  # ensure symmetric/PSD
 
         for k, wk in enumerate(w):
-            # Compute transfer function G(iω) = (K + iωI)^{-1}
-            G = np.linalg.inv(K + 1j * wk * np.eye(m))  # (m, m)
-
-            # Entropy kernel H_u(ω) = G^H L G
-            Hu = np.conj(G.T) @ L @ G  # (m, m)
-
-            # Per-bin contribution: U_k^H H_u(ω_k) U_k
+            A = K + 1j * wk * np.eye(m)
+            G = np.linalg.solve(A, np.eye(m))  # (K + iωI)^{-1}
+            Hu = np.conj(G.T) @ Ls @ G  # G^H L G
             Sigma_bins[k] = np.real(np.conj(U[k]).T @ Hu @ U[k])
 
-        # Total entropy via discrete frequency sum
         Sigma = Sigma_bins.sum() * dt / N
-
         return float(scale * Sigma), scale * Sigma_bins * dt / N
 
     def map_xref_to_u(self, Xref: np.ndarray, dt: float, K: np.ndarray) -> np.ndarray:
@@ -452,9 +447,9 @@ class ThermodynamicAccountant:
 
         return {
             "frequencies": frequencies,
-            "entropy_spectrum": entropy_spectrum / (N * dt),  # Normalize like other methods
+            "entropy_spectrum": entropy_spectrum * dt / N,  # <-- fix: multiply, not divide
             "entropy_kernel_trace": entropy_kernel_trace,
-            "control_spectrum_power": control_spectrum_power,
+            "control_spectrum_power": control_spectrum_power,  # optional: leave unnormalized
         }
 
     def validate_parseval_entropy(

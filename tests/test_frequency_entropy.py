@@ -94,7 +94,7 @@ class TestFFTEntropyMethods:
 
         # Should match within numerical integration tolerance (trapz vs rectangular rule)
         relative_error = abs(freq_entropy - time_result.sigma_total) / abs(time_result.sigma_total)
-        assert relative_error < 0.01, f"Parseval's theorem violated, error: {relative_error}"
+        assert relative_error < 0.005, f"Parseval's theorem violated, error: {relative_error}"
 
     def test_entropy_from_u_freq_consistency(self, simple_system):
         """Test consistency of control entropy calculation."""
@@ -117,7 +117,7 @@ class TestFFTEntropyMethods:
 
         # Should be reasonably close when quasi-steady approximation is valid
         relative_error = abs(entropy_u_fft - entropy_u_time.sigma_total) / abs(entropy_u_time.sigma_total)
-        assert relative_error < 0.2, f"Inconsistent control entropy calculation, error: {relative_error}"
+        assert relative_error < 0.05, f"Inconsistent control entropy calculation, error: {relative_error}"
 
     def test_freqs_helper_function(self, simple_system):
         """Test frequency grid generation."""
@@ -177,7 +177,7 @@ class TestFFTEntropyMethods:
         assert "relative_error" in validation
 
         # Error should be small (accounts for trapz vs rectangular integration differences)
-        assert validation["relative_error"] < 0.01, f"Parseval validation failed: {validation['relative_error']}"
+        assert validation["relative_error"] < 0.005, f"Parseval validation failed: {validation['relative_error']}"
 
 
 class TestEntropyKernel:
