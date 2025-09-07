@@ -162,7 +162,7 @@ def compute_concentrations_from_quotients(
     B: np.ndarray,
     lnKeq_consistent: np.ndarray,
     enforce_conservation: bool = True,
-    algorithm: str = "convex",
+    algorithm: str = "fsolve",
 ) -> Optional[np.ndarray]:
     """Reconstruct concentrations from reaction quotients using conservation laws.
 
