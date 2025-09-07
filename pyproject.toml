@@ -32,6 +32,7 @@ dependencies = [
     "scipy>=1.7.0", 
     "matplotlib>=3.3.0",
     "python-libsbml>=5.19.0",
+    "tellurium>=2.2.0",
 ]
 
 [project.urls]
@@ -53,4 +54,9 @@ dev = [
     "isort>=5.0",
     "flake8>=5.0",
     "mypy>=1.0",
+]
+test = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "psutil>=5.9.0",
 ]

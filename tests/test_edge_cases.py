@@ -312,7 +312,7 @@ class TestNumericalStability:
             # Should not overflow or underflow inappropriately
             assert np.isfinite(Q).all()
             
-        except (OverflowError, UnderflowError, FloatingPointError):
+        except (OverflowError, FloatingPointError):
             # May legitimately overflow with extreme values
             pass
 
@@ -570,7 +570,7 @@ class TestFloatingPointEdgeCases:
         try:
             Q = network.compute_reaction_quotients(denormal_concentrations)
             assert np.isfinite(Q).all()
-        except (UnderflowError, FloatingPointError):
+        except FloatingPointError:
             # May legitimately fail with denormal numbers
             pass
 
