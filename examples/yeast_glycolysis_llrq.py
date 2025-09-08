@@ -468,8 +468,17 @@ def demonstrate_thermodynamic_accounting(results: Dict, dynamics: LLRQDynamics):
     print("\\n🔥 Thermodynamic Accounting")
     print("============================")
 
-    # Create thermodynamic accountant
-    accountant = ThermodynamicAccountant(dynamics)
+    # Create thermodynamic accountant with auto-derived L
+    # Get equilibrium concentrations from results
+    baseline_result = results["baseline"]["result"]
+    c_eq = baseline_result.get("initial_concentrations", baseline_result.get("concentrations_initial", None))
+
+    if c_eq is None:
+        print("  Warning: Could not find equilibrium concentrations, using default values")
+        c_eq = np.ones(dynamics.network.n_species) * 0.1  # Default concentrations
+
+    # Create accountant with K matrix and concentrations to auto-derive L
+    accountant = ThermodynamicAccountant(dynamics.network, relaxation_matrix=dynamics.K, equilibrium_concentrations=c_eq)
 
     # Analyze entropy production for each scenario
     for scenario_name, data in results.items():
@@ -487,7 +496,7 @@ def demonstrate_thermodynamic_accounting(results: Dict, dynamics: LLRQDynamics):
 
         # Calculate entropy production from reaction forces
         t = result["time"]
-        x = result["log_deviations"].T  # Shape: (reactions, time)
+        x = result["log_deviations"]  # Shape: (time, reactions)
 
         # Simple entropy accounting using reaction forces
         try:
@@ -499,7 +508,9 @@ def demonstrate_thermodynamic_accounting(results: Dict, dynamics: LLRQDynamics):
 
         except Exception as e:
             print(f"  Entropy calculation failed: {e}")
-            print(f"  (This is expected - thermodynamic accounting needs more setup)")
+            import traceback
+
+            traceback.print_exc()
 
 
 def main():

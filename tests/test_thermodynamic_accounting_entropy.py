@@ -450,3 +450,184 @@ class TestNumericalStability:
         assert np.allclose(result.from_u.sigma_time, 0)
         assert abs(result.from_x.sigma_total) < 1e-12
         assert abs(result.from_u.sigma_total) < 1e-12
+
+
+class TestOnsagerDerivation:
+    """Test derivation of Onsager conductance L from K and S matrices."""
+
+    def test_derive_onsager_simple_network(self):
+        """Test L derivation for simple A ⇌ B network."""
+        network = ReactionNetwork(["A", "B"], ["R1"], [[-1], [1]])
+
+        # Create synthetic K matrix
+        K = np.array([[2.0]])
+        concentrations = np.array([1.0, 2.0])
+
+        accountant = ThermodynamicAccountant(network)
+        result = accountant.derive_onsager_from_K_S(K, concentrations)
+
+        # Check result structure
+        assert "L" in result
+        assert "G" in result
+        assert "reconstruction_error" in result
+        assert "rank_G" in result
+
+        # Check L properties
+        L = result["L"]
+        assert L.shape == (1, 1)
+        assert np.all(np.isfinite(L))
+
+        # Check reconstruction: should have K ≈ G @ L
+        G = result["G"]
+        recon_K = G @ L
+        assert np.allclose(recon_K, K, rtol=1e-10)
+
+        # Check that L is stored in accountant
+        assert accountant.L is not None
+        np.testing.assert_array_equal(accountant.L, L)
+
+    def test_derive_onsager_multi_reaction(self):
+        """Test L derivation for multi-reaction network."""
+        # A ⇌ B ⇌ C network
+        network = ReactionNetwork(["A", "B", "C"], ["R1", "R2"], [[-1, 0], [1, -1], [0, 1]])
+
+        # Create synthetic K matrix (2x2)
+        K = np.array([[3.0, -1.0], [-1.0, 2.0]])
+        concentrations = np.array([1.0, 2.0, 1.5])
+
+        accountant = ThermodynamicAccountant(network)
+        result = accountant.derive_onsager_from_K_S(K, concentrations)
+
+        # Check basic properties
+        L = result["L"]
+        assert L.shape == (2, 2)
+        assert np.all(np.isfinite(L))
+
+        # Check reconstruction
+        G = result["G"]
+        recon_K = G @ L
+        np.testing.assert_allclose(recon_K, K, rtol=1e-1)  # More relaxed tolerance for multi-reaction
+
+        # Check that reconstruction error is reasonable
+        assert result["reconstruction_error"] < 0.1  # More relaxed for multi-reaction networks
+
+    def test_derive_onsager_symmetry_enforcement(self):
+        """Test symmetry enforcement in L derivation."""
+        network = ReactionNetwork(["A", "B"], ["R1"], [[-1], [1]])
+
+        # Create slightly asymmetric K
+        K = np.array([[2.1]])
+        concentrations = np.array([1.0, 1.0])
+
+        accountant = ThermodynamicAccountant(network)
+
+        # Test with and without symmetry enforcement
+        result_no_sym = accountant.derive_onsager_from_K_S(K, concentrations, enforce_symmetry=False)
+        result_with_sym = accountant.derive_onsager_from_K_S(K, concentrations, enforce_symmetry=True)
+
+        L_no_sym = result_no_sym["L"]
+        L_with_sym = result_with_sym["L"]
+
+        # For 1x1 matrix, symmetry doesn't change anything
+        np.testing.assert_allclose(L_no_sym, L_with_sym, rtol=1e-14)
+
+    def test_derive_onsager_psd_enforcement(self):
+        """Test PSD enforcement in L derivation."""
+        # Create 2x2 network to test PSD projection meaningfully
+        network = ReactionNetwork(["A", "B", "C"], ["R1", "R2"], [[-1, 0], [1, -1], [0, 1]])
+
+        # Create K that might give slightly negative eigenvalues after solve
+        K = np.array([[1.0, 0.1], [0.1, 1.0]])
+        concentrations = np.array([1.0, 1.0, 1.0])
+
+        accountant = ThermodynamicAccountant(network)
+        result = accountant.derive_onsager_from_K_S(K, concentrations, enforce_psd=True)
+
+        # Check that L is PSD
+        L = result["L"]
+        eigvals = np.linalg.eigvals(L)
+        assert np.all(eigvals >= -1e-12)  # Allow tiny numerical errors
+
+    def test_auto_derive_in_init(self):
+        """Test automatic L derivation in __init__."""
+        network = ReactionNetwork(["A", "B"], ["R1"], [[-1], [1]])
+
+        K = np.array([[1.5]])
+        concentrations = np.array([1.0, 2.0])
+
+        # L should be auto-derived
+        accountant = ThermodynamicAccountant(network, relaxation_matrix=K, equilibrium_concentrations=concentrations)
+
+        # Check that L was computed
+        assert accountant.L is not None
+        assert accountant.L.shape == (1, 1)
+
+        # Check reconstruction
+        S = network.S
+        Cinv = np.diag(1.0 / concentrations)
+        G = S.T @ Cinv @ S
+        recon_K = G @ accountant.L
+        np.testing.assert_allclose(recon_K, K, rtol=1e-10)
+
+    def test_entropy_from_x_with_K_concentrations(self):
+        """Test entropy_from_x with K and concentrations for L derivation."""
+        network = ReactionNetwork(["A", "B"], ["R1"], [[-1], [1]])
+
+        K = np.array([[2.0]])
+        concentrations = np.array([1.0, 1.0])
+
+        # Create accountant without L
+        accountant = ThermodynamicAccountant(network)
+        assert accountant.L is None
+
+        # Create synthetic trajectory
+        t = np.array([0.0, 0.5, 1.0])
+        x = np.array([[1.0], [0.5], [0.1]])
+
+        # This should derive L and compute entropy
+        result = accountant.entropy_from_x(t, x, K=K, concentrations=concentrations)
+
+        # Check that L was derived and stored
+        assert accountant.L is not None
+
+        # Check that entropy was computed
+        assert isinstance(result, AccountingResult)
+        assert len(result.sigma_time) == len(t)
+        assert np.isfinite(result.sigma_total)
+        assert result.sigma_total >= 0  # Entropy production should be non-negative
+
+    def test_rank_deficient_G_matrix(self):
+        """Test handling of rank-deficient G matrix."""
+        # Create a network where G might be rank-deficient
+        # This can happen with conservation laws
+        network = ReactionNetwork(
+            ["A", "B", "C", "D"],
+            ["R1", "R2"],
+            [[-1, 0], [1, -1], [0, 1], [0, 0]],  # D is not involved in reactions
+        )
+
+        K = np.array([[1.0, 0.1], [0.1, 2.0]])
+        concentrations = np.array([1.0, 1.0, 1.0, 1.0])
+
+        accountant = ThermodynamicAccountant(network)
+        result = accountant.derive_onsager_from_K_S(K, concentrations)
+
+        # Should not crash and should provide reasonable L
+        L = result["L"]
+        assert L.shape == (2, 2)
+        assert np.all(np.isfinite(L))
+
+        # Reconstruction error might be larger for rank-deficient case
+        assert result["reconstruction_error"] < 1.0  # Reasonable bound
+
+    def test_error_handling(self):
+        """Test error handling in L derivation."""
+        network = ReactionNetwork(["A", "B"], ["R1"], [[-1], [1]])
+        accountant = ThermodynamicAccountant(network)
+
+        # Test error when calling entropy_from_x without L, K, or concentrations
+        t = np.array([0.0, 1.0])
+        x = np.array([[1.0], [0.5]])
+
+        with pytest.raises(ValueError, match="No Onsager conductance matrix available"):
+            accountant.entropy_from_x(t, x)

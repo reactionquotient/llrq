@@ -39,17 +39,30 @@ class ThermodynamicAccountant:
     thermodynamic quantities from trajectory data.
     """
 
-    def __init__(self, network: ReactionNetwork, onsager_conductance: Optional[np.ndarray] = None):
+    def __init__(
+        self,
+        network: ReactionNetwork,
+        onsager_conductance: Optional[np.ndarray] = None,
+        relaxation_matrix: Optional[np.ndarray] = None,
+        equilibrium_concentrations: Optional[np.ndarray] = None,
+    ):
         """Initialize thermodynamic accountant.
 
         Args:
             network: Reaction network
             onsager_conductance: Pre-computed Onsager conductance matrix L.
                 If None, will be computed when needed from trajectory data.
+            relaxation_matrix: Relaxation matrix K for auto-deriving L
+            equilibrium_concentrations: Equilibrium concentrations for auto-deriving L
         """
         self.network = network
         self.L = onsager_conductance
         self.n_reactions = network.n_reactions
+
+        # Auto-derive L if K and concentrations provided but L is not
+        if self.L is None and relaxation_matrix is not None and equilibrium_concentrations is not None:
+            result = self.derive_onsager_from_K_S(relaxation_matrix, equilibrium_concentrations)
+            # L is already stored in self.L by derive_onsager_from_K_S
 
     def _quad_time_series(self, t: np.ndarray, Y: np.ndarray, M: np.ndarray) -> tuple[np.ndarray, float]:
         """Compute q(t) = diag(Y(t) @ M @ Y(t)^T) and its time integral via trapz.
@@ -76,14 +89,23 @@ class ThermodynamicAccountant:
         return (V * w) @ V.T
 
     def entropy_from_x(
-        self, t: np.ndarray, x: np.ndarray, L: Optional[np.ndarray] = None, scale: float = 1.0, psd_clip: float = 0.0
+        self,
+        t: np.ndarray,
+        x: np.ndarray,
+        L: Optional[np.ndarray] = None,
+        K: Optional[np.ndarray] = None,
+        concentrations: Optional[np.ndarray] = None,
+        scale: float = 1.0,
+        psd_clip: float = 0.0,
     ) -> AccountingResult:
         """Entropy production Σ = ∫ sigma(t) dt with sigma(t) = scale * x(t)^T L x(t).
 
         Args:
             t: Time points (T,) - nonuniform OK
             x: Reaction-force coordinates (T, m) - your paper's x = ln(Q/K_eq)
-            L: Onsager conductance (m, m) - if None, uses self.L
+            L: Onsager conductance (m, m) - if None, uses self.L or derives from K and concentrations
+            K: Relaxation matrix for deriving L if needed
+            concentrations: Concentrations for deriving L if needed
             scale: Multiply by R (or k_B) to get physical units if desired
             psd_clip: Clip eigenvalues of L to this value to ensure PSD
 
@@ -92,8 +114,14 @@ class ThermodynamicAccountant:
         """
         if L is None:
             if self.L is None:
-                raise ValueError("No Onsager conductance matrix available. Provide L or set during initialization.")
-            L = self.L
+                # Try to derive L if K and concentrations are provided
+                if K is not None and concentrations is not None:
+                    result = self.derive_onsager_from_K_S(K, concentrations)
+                    L = result["L"]
+                else:
+                    raise ValueError("No Onsager conductance matrix available. Provide L or set during initialization.")
+            else:
+                L = self.L
 
         Ls = self._sym_psd(np.asarray(L), eps=psd_clip)
         sigma_t, Sigma = self._quad_time_series(t, np.asarray(x), Ls)
@@ -274,6 +302,68 @@ class ThermodynamicAccountant:
 
         # Fall back to entropy from reaction forces only
         return self.entropy_from_x(t, x, L, scale=scale)
+
+    def derive_onsager_from_K_S(
+        self,
+        K: np.ndarray,
+        concentrations: np.ndarray,
+        S: Optional[np.ndarray] = None,
+        enforce_symmetry: bool = True,
+        enforce_psd: bool = True,
+    ) -> Dict[str, Any]:
+        """Derive Onsager conductance L from K = GL via least squares.
+
+        Args:
+            K: Relaxation matrix (n_reactions × n_reactions)
+            concentrations: Current/equilibrium concentrations (n_species,)
+            S: Stoichiometric matrix (n_species × n_reactions). If None, uses network.stoichiometric_matrix
+            enforce_symmetry: Apply L_sym = 0.5(L + L^T)
+            enforce_psd: Project to PSD cone
+
+        Returns:
+            Dictionary with L and diagnostics
+        """
+        if S is None:
+            S = self.network.S
+
+        # Build G = S^T C^{-1} S
+        Cinv = np.diag(1.0 / concentrations)
+        G = S.T @ Cinv @ S
+
+        # Solve for L: GL = K using least squares (handles all cases)
+        L_min, residuals, rank_G, s = np.linalg.lstsq(G, K, rcond=None)
+
+        # Apply symmetry and PSD constraints
+        L_result = L_min
+
+        if enforce_symmetry:
+            L_result = 0.5 * (L_result + L_result.T)
+
+        eigvals_original = None
+        eigvals_clipped = None
+
+        if enforce_psd:
+            eigvals_original, eigvecs = np.linalg.eigh(L_result)
+            eigvals_clipped = np.clip(eigvals_original, 0.0, None)
+            L_result = (eigvecs * eigvals_clipped) @ eigvecs.T
+
+        # Compute reconstruction error
+        recon_K = G @ L_result
+        recon_error = np.linalg.norm(K - recon_K, "fro") / max(1.0, np.linalg.norm(K, "fro"))
+
+        # Store the result
+        self.L = L_result
+
+        return {
+            "L": L_result,
+            "L_minimal": L_min,
+            "G": G,
+            "rank_G": rank_G,
+            "reconstruction_error": recon_error,
+            "eigenvalues_original": eigvals_original,
+            "eigenvalues_clipped": eigvals_clipped,
+            "symmetry_error": np.linalg.norm(L_min - L_min.T, "fro"),
+        }
 
     def compute_onsager_conductance(
         self, concentrations: np.ndarray, forward_rates: np.ndarray, backward_rates: np.ndarray, mode: str = "auto"
