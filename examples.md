@@ -39,43 +39,43 @@ import llrq
 def main():
     print("LLRQ Package Example: Simple A ⇌ B Reaction")
     print("=" * 50)
-    
+
     # Create a simple reaction system
     network, dynamics, solver, visualizer = llrq.simple_reaction(
         reactant_species="A",
-        product_species="B", 
+        product_species="B",
         equilibrium_constant=2.0,
         relaxation_rate=1.0,
         initial_concentrations={"A": 1.0, "B": 0.1}
     )
-    
+
     # Print network summary
     print("\nReaction Network:")
     print(network.summary())
-    
+
     # Solve the dynamics
     solution = solver.solve(
         initial_conditions={"A": 1.0, "B": 0.1},
         t_span=(0, 10),
         method='analytical'
     )
-    
+
     print(f"\nSolution successful: {solution['success']}")
     print(f"Method used: {solution['method']}")
-    
+
     # Plot results
     fig = visualizer.plot_dynamics(solution)
     plt.show()
-    
+
     # Demonstrate external drive
     print("\nExternal drive example:")
-    
+
     def step_drive(t):
         return np.array([0.5 if t > 5 else 0.0])
-    
+
     def oscillating_drive(t):
         return np.array([0.3 * np.sin(2*np.pi*t)])
-    
+
     # Test step drive
     dynamics.external_drive = step_drive
     step_solution = solver.solve(
@@ -83,32 +83,32 @@ def main():
         t_span=(0, 10),
         method='numerical'
     )
-    
-    # Test oscillating drive  
+
+    # Test oscillating drive
     dynamics.external_drive = oscillating_drive
     osc_solution = solver.solve(
         initial_conditions={"A": 1.0, "B": 0.1},
         t_span=(0, 10),
         method='numerical'
     )
-    
+
     # Plot comparison
     fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-    
+
     # No drive
     dynamics.external_drive = lambda t: np.array([0.0])
     no_drive_solution = solver.solve(
         initial_conditions={"A": 1.0, "B": 0.1},
         t_span=(0, 10)
     )
-    
+
     solutions = [
         (no_drive_solution, "No Drive"),
         (step_solution, "Step Drive"),
         (osc_solution, "Oscillating Drive"),
         (solution, "Analytical")
     ]
-    
+
     for i, (sol, title) in enumerate(solutions):
         ax = axes[i//2, i%2]
         t = sol['t']
@@ -119,10 +119,10 @@ def main():
         ax.set_ylabel('Concentration')
         ax.legend()
         ax.grid(True, alpha=0.3)
-    
+
     plt.tight_layout()
     plt.show()
-    
+
     print("\nExample completed successfully!")
 
 if __name__ == "__main__":
@@ -162,11 +162,11 @@ def enzymatic_reaction_example():
     """Example: Simple enzymatic reaction E + S ⇌ ES → E + P."""
     print("Enzymatic Reaction Network: E + S ⇌ ES → E + P")
     print("=" * 50)
-    
+
     # Network topology
     species_ids = ['E', 'S', 'ES', 'P']
     reaction_ids = ['R1_forward', 'R1_backward', 'R2']
-    
+
     # Stoichiometric matrix
     S = np.array([
         [-1,  1,  1],   # E: consumed in R1f, produced in R1b and R2
@@ -174,39 +174,39 @@ def enzymatic_reaction_example():
         [ 1, -1, -1],   # ES: produced in R1f, consumed in R1b and R2
         [ 0,  0,  1]    # P: produced in R2
     ])
-    
+
     network = ReactionNetwork(species_ids, reaction_ids, S)
-    
+
     # Mass action parameters
     # R1: E + S ⇌ ES with kf1=2.0, kr1=1.0 → Keq1 = kf1/kr1 = 2.0
     # R2: ES → E + P with kf2=5.0, kr2=0.0 → Keq2 = ∞ (irreversible)
-    
+
     kf = np.array([2.0, 1.0, 5.0])  # Forward rates
     kr = np.array([1.0, 2.0, 0.0])  # Backward rates
-    
+
     # Convert to LLRQ parameters
     Keq = np.where(kr > 0, kf/kr, 1e6)  # Large Keq for irreversible reactions
-    
+
     # LLRQ relaxation rates (Diamond 2025 algorithm)
     c_star = np.array([1.0, 2.0, 0.1, 0.5])  # Operating point concentrations
-    
+
     # For single substrate reactions: k = kr * (1 + Keq)
     # For more complex stoichiometry, use the full algorithm
     K_diag = np.array([
         kr[0] * (1 + Keq[0]),  # R1 forward
-        kf[1] * (1 + 1/Keq[0]),  # R1 backward  
+        kf[1] * (1 + 1/Keq[0]),  # R1 backward
         kf[2]  # R2 (irreversible)
     ])
     K = np.diag(K_diag)
-    
+
     print(f"Equilibrium constants: {Keq}")
     print(f"Relaxation matrix diagonal: {K_diag}")
-    
+
     # Create dynamics
     dynamics = LLRQDynamics(network, Keq, K)
     solver = LLRQSolver(dynamics)
     visualizer = LLRQVisualizer(network)
-    
+
     # Initial conditions
     initial_conditions = {
         'E': 1.0,    # Total enzyme
@@ -214,21 +214,21 @@ def enzymatic_reaction_example():
         'ES': 0.0,   # No complex initially
         'P': 0.0     # No product initially
     }
-    
+
     # Solve the dynamics
     solution = solver.solve(
         initial_conditions=initial_conditions,
         t_span=(0, 3),
         method='numerical'
     )
-    
+
     # Plot results
     fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-    
+
     # Species concentrations
     t = solution['t']
     concentrations = solution['concentrations']
-    
+
     axes[0, 0].plot(t, concentrations['E'], label='E', linewidth=2)
     axes[0, 0].plot(t, concentrations['S'], label='S', linewidth=2)
     axes[0, 0].plot(t, concentrations['ES'], label='ES', linewidth=2)
@@ -238,11 +238,11 @@ def enzymatic_reaction_example():
     axes[0, 0].set_ylabel('Concentration')
     axes[0, 0].legend()
     axes[0, 0].grid(True, alpha=0.3)
-    
+
     # Conservation laws
     E_total = concentrations['E'] + concentrations['ES']
     mass_total = concentrations['S'] + concentrations['ES'] + concentrations['P']
-    
+
     axes[0, 1].plot(t, E_total, label='Total Enzyme', linewidth=2)
     axes[0, 1].plot(t, mass_total, label='Total S/P', linewidth=2)
     axes[0, 1].set_title('Conservation Laws')
@@ -250,10 +250,10 @@ def enzymatic_reaction_example():
     axes[0, 1].set_ylabel('Conserved Quantities')
     axes[0, 1].legend()
     axes[0, 1].grid(True, alpha=0.3)
-    
+
     # Reaction quotients
     Q = solution['reaction_quotients']
-    
+
     axes[1, 0].semilogy(t, Q[:, 0], label='Q₁ (forward)', linewidth=2)
     axes[1, 0].semilogy(t, Q[:, 1], label='Q₁ (backward)', linewidth=2)
     axes[1, 0].semilogy(t, Q[:, 2], label='Q₂', linewidth=2)
@@ -263,10 +263,10 @@ def enzymatic_reaction_example():
     axes[1, 0].set_ylabel('Reaction Quotient')
     axes[1, 0].legend()
     axes[1, 0].grid(True, alpha=0.3)
-    
+
     # Log deviations
     log_dev = solution['log_deviations']
-    
+
     axes[1, 1].plot(t, log_dev[:, 0], label='ln(Q₁/Keq₁)', linewidth=2)
     axes[1, 1].plot(t, log_dev[:, 1], label='ln(Q₁⁻¹/Keq₁⁻¹)', linewidth=2)
     axes[1, 1].plot(t, log_dev[:, 2], label='ln(Q₂/Keq₂)', linewidth=2)
@@ -276,15 +276,15 @@ def enzymatic_reaction_example():
     axes[1, 1].set_ylabel('ln(Q/Keq)')
     axes[1, 1].legend()
     axes[1, 1].grid(True, alpha=0.3)
-    
+
     plt.tight_layout()
     plt.show()
-    
+
     # Print final state
     print("\nFinal state:")
     for species in species_ids:
         print(f"  {species}: {concentrations[species][-1]:.4f}")
-    
+
     print(f"\nFinal reaction quotients:")
     for i, rxn in enumerate(reaction_ids):
         print(f"  {rxn}: Q={Q[-1, i]:.4f} (Keq={Keq[i]:.4f})")
@@ -326,11 +326,11 @@ from llrq import ReactionNetwork, LLRQDynamics, LLRQSolver, LLRQVisualizer
 
 class LQRController:
     """Linear Quadratic Regulator for LLRQ dynamics."""
-    
+
     def __init__(self, dynamics, Q, R):
         """
         Initialize LQR controller.
-        
+
         Args:
             dynamics: LLRQDynamics instance
             Q: State cost matrix
@@ -339,15 +339,15 @@ class LQRController:
         self.dynamics = dynamics
         self.Q = Q
         self.R = R
-        
+
         # System matrices: dx/dt = -Kx + Bu
         self.A = -dynamics.K
         self.B = np.eye(dynamics.n_reactions)  # Direct control of each reaction
-        
+
         # Solve Riccati equation
         self.P = solve_continuous_are(self.A, self.B, Q, R)
         self.gain = np.linalg.inv(R) @ self.B.T @ self.P
-        
+
     def control_law(self, x, x_target=None):
         """Compute optimal control input."""
         if x_target is None:
@@ -359,87 +359,87 @@ def lqr_control_example():
     """Demonstrate LQR control of A + B ⇌ C reaction."""
     print("LQR Control Example: A + B ⇌ C")
     print("=" * 40)
-    
+
     # Create reaction network: A + B ⇌ C
     species_ids = ['A', 'B', 'C']
     reaction_ids = ['forward', 'backward']
-    
+
     S = np.array([
         [-1, 1],   # A
-        [-1, 1],   # B  
+        [-1, 1],   # B
         [ 2, -2]   # C (2 molecules produced/consumed)
     ])
-    
+
     network = ReactionNetwork(species_ids, reaction_ids, S)
-    
+
     # Set up dynamics
     Keq = np.array([2.0, 0.5])  # Forward and backward equilibrium constants
     K = np.array([[1.5, 0.1],   # Coupled relaxation rates
                   [0.1, 1.0]])
-    
+
     dynamics = LLRQDynamics(network, Keq, K)
     solver = LLRQSolver(dynamics)
-    
+
     # Design LQR controller
     Q_weight = np.diag([1.0, 1.0])  # Equal weighting on both reactions
     R_weight = np.diag([0.1, 0.1])  # Control effort penalty
-    
+
     controller = LQRController(dynamics, Q_weight, R_weight)
-    
+
     print(f"LQR gain matrix:\n{controller.gain}")
-    
+
     # Initial conditions
     initial_conditions = {'A': 2.0, 'B': 1.0, 'C': 0.1}
-    
+
     # Target: drive system to specific reaction quotient ratios
     target_x = np.array([-0.5, 0.3])  # Target log deviations
-    
+
     # Simulate uncontrolled system
     solution_uncontrolled = solver.solve(
         initial_conditions=initial_conditions,
         t_span=np.linspace(0, 5, 100),
         method='numerical'
     )
-    
+
     # Simulate controlled system
     def controlled_dynamics(t, x):
         # Compute control input
         u = controller.control_law(x, target_x)
         # Apply dynamics with control
         return dynamics.dynamics(t, x) + u
-    
+
     # Initial log deviations
     c0 = np.array([initial_conditions[species] for species in species_ids])
     Q0 = network.compute_reaction_quotients(c0)
     x0 = dynamics.compute_log_deviation(Q0)
-    
+
     # Solve controlled system
     from scipy.integrate import odeint
     t_controlled = np.linspace(0, 5, 100)
     x_controlled = odeint(controlled_dynamics, x0, t_controlled)
-    
+
     # Convert back to concentrations (simplified for visualization)
     Q_controlled = np.array([dynamics.compute_reaction_quotients(x) for x in x_controlled])
-    
+
     # Plotting
     fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-    
+
     # Concentrations comparison
     t_unc = solution_uncontrolled['t']
     conc_unc = solution_uncontrolled['concentrations']
-    
+
     for species in species_ids:
         axes[0, 0].plot(t_unc, conc_unc[species], '-', label=f'{species} (uncontrolled)', linewidth=2)
-    
+
     axes[0, 0].set_title('Concentrations: Uncontrolled')
     axes[0, 0].set_xlabel('Time')
     axes[0, 0].set_ylabel('Concentration')
     axes[0, 0].legend()
     axes[0, 0].grid(True, alpha=0.3)
-    
+
     # Log deviations comparison
     x_unc = solution_uncontrolled['log_deviations']
-    
+
     axes[0, 1].plot(t_unc, x_unc[:, 0], '-', label='Forward (uncontrolled)', linewidth=2)
     axes[0, 1].plot(t_unc, x_unc[:, 1], '-', label='Backward (uncontrolled)', linewidth=2)
     axes[0, 1].plot(t_controlled, x_controlled[:, 0], '--', label='Forward (controlled)', linewidth=2)
@@ -451,10 +451,10 @@ def lqr_control_example():
     axes[0, 1].set_ylabel('ln(Q/Keq)')
     axes[0, 1].legend()
     axes[0, 1].grid(True, alpha=0.3)
-    
+
     # Control inputs
     u_controlled = np.array([controller.control_law(x, target_x) for x in x_controlled])
-    
+
     axes[1, 0].plot(t_controlled, u_controlled[:, 0], label='Forward control', linewidth=2)
     axes[1, 0].plot(t_controlled, u_controlled[:, 1], label='Backward control', linewidth=2)
     axes[1, 0].set_title('Optimal Control Inputs')
@@ -462,7 +462,7 @@ def lqr_control_example():
     axes[1, 0].set_ylabel('Control u(t)')
     axes[1, 0].legend()
     axes[1, 0].grid(True, alpha=0.3)
-    
+
     # Cost comparison
     def compute_cost(x_traj, u_traj):
         cost = 0
@@ -472,20 +472,20 @@ def lqr_control_example():
             if i < len(u_traj):
                 cost += u_traj[i].T @ R_weight @ u_traj[i]
         return cost
-    
+
     cost_uncontrolled = compute_cost(x_unc, np.zeros_like(x_unc))
     cost_controlled = compute_cost(x_controlled, u_controlled)
-    
-    axes[1, 1].bar(['Uncontrolled', 'LQR Controlled'], 
+
+    axes[1, 1].bar(['Uncontrolled', 'LQR Controlled'],
                    [cost_uncontrolled, cost_controlled],
                    color=['red', 'blue'], alpha=0.7)
     axes[1, 1].set_title('Total Cost Comparison')
     axes[1, 1].set_ylabel('Quadratic Cost')
     axes[1, 1].grid(True, alpha=0.3)
-    
+
     plt.tight_layout()
     plt.show()
-    
+
     print(f"\nCost reduction: {(cost_uncontrolled - cost_controlled)/cost_uncontrolled*100:.1f}%")
     print("LQR control example completed!")
 
@@ -527,17 +527,17 @@ def glycolysis_oscillation_example():
     """Simplified glycolysis model showing oscillations."""
     print("Glycolysis Oscillation Example")
     print("=" * 35)
-    
+
     # Simplified glycolysis network
     # Glucose → G6P → F6P → FBP → DHAP/GAP → PEP → Pyruvate
     species_ids = ['Glc', 'G6P', 'F6P', 'FBP', 'GAP', 'PEP', 'Pyr', 'ATP', 'ADP']
     reaction_ids = ['HK', 'PGI', 'PFK', 'ALDO', 'GAPDH', 'PK', 'ATPase']
-    
+
     # Simplified stoichiometry (focusing on key regulatory steps)
     S = np.array([
         [-1,  0,  0,  0,  0,  0,  0],   # Glc
         [ 1, -1,  0,  0,  0,  0,  0],   # G6P
-        [ 0,  1, -1,  0,  0,  0,  0],   # F6P  
+        [ 0,  1, -1,  0,  0,  0,  0],   # F6P
         [ 0,  0,  1, -1,  0,  0,  0],   # FBP
         [ 0,  0,  0,  2, -1,  0,  0],   # GAP
         [ 0,  0,  0,  0,  1, -1,  0],   # PEP
@@ -545,10 +545,10 @@ def glycolysis_oscillation_example():
         [-1,  0, -1,  0,  1,  1, -1],   # ATP
         [ 1,  0,  1,  0, -1, -1,  1]    # ADP
     ])
-    
+
     network = ReactionNetwork(species_ids, reaction_ids, S)
     print("Network created with", network.n_species, "species and", network.n_reactions, "reactions")
-    
+
     # Set kinetic parameters (based on typical values)
     # Equilibrium constants
     Keq = np.array([
@@ -560,18 +560,18 @@ def glycolysis_oscillation_example():
         100.0,   # PK: highly favorable
         1000.0   # ATPase: ATP consumption
     ])
-    
+
     # Relaxation matrix (includes allosteric effects)
     K = np.diag([5.0, 10.0, 2.0, 8.0, 6.0, 15.0, 3.0])
-    
+
     # Add coupling for key regulatory interactions
     K[2, 6] = -0.5  # PFK inhibited by ATP consumption
     K[6, 2] = 0.3   # ATPase affected by PFK activity
-    
+
     dynamics = LLRQDynamics(network, Keq, K)
     solver = LLRQSolver(dynamics)
     visualizer = LLRQVisualizer(network)
-    
+
     # Define ATP/ADP drive (oscillating ATP demand)
     def atp_oscillation(t):
         """Oscillating ATP demand mimicking cellular work."""
@@ -580,9 +580,9 @@ def glycolysis_oscillation_example():
         drive = np.zeros(len(reaction_ids))
         drive[6] = base_consumption + oscillatory  # ATPase
         return drive
-    
+
     dynamics.external_drive = atp_oscillation
-    
+
     # Initial conditions (typical cellular concentrations in mM)
     initial_conditions = {
         'Glc': 5.0,   # External glucose
@@ -595,62 +595,62 @@ def glycolysis_oscillation_example():
         'ATP': 5.0,   # High ATP
         'ADP': 0.5    # Low ADP
     }
-    
+
     # Solve for oscillatory behavior
     solution = solver.solve(
         initial_conditions=initial_conditions,
         t_span=(0, 20),  # Longer time to see oscillations
         method='numerical'
     )
-    
+
     # Create comprehensive plots
     fig = plt.figure(figsize=(15, 10))
-    
+
     # Metabolite concentrations
     ax1 = plt.subplot(2, 3, 1)
     t = solution['t']
     key_metabolites = ['G6P', 'F6P', 'FBP', 'PEP']
-    
+
     for metabolite in key_metabolites:
-        ax1.plot(t, solution['concentrations'][metabolite], 
+        ax1.plot(t, solution['concentrations'][metabolite],
                 label=metabolite, linewidth=2)
     ax1.set_title('Key Metabolite Concentrations')
     ax1.set_xlabel('Time')
     ax1.set_ylabel('Concentration (mM)')
     ax1.legend()
     ax1.grid(True, alpha=0.3)
-    
+
     # ATP/ADP ratio
     ax2 = plt.subplot(2, 3, 2)
     atp = solution['concentrations']['ATP']
     adp = solution['concentrations']['ADP']
     atp_adp_ratio = atp / (adp + 1e-6)  # Avoid division by zero
-    
+
     ax2.plot(t, atp_adp_ratio, 'r-', linewidth=2, label='ATP/ADP')
     ax2.set_title('Energy Charge (ATP/ADP Ratio)')
     ax2.set_xlabel('Time')
     ax2.set_ylabel('ATP/ADP Ratio')
     ax2.legend()
     ax2.grid(True, alpha=0.3)
-    
+
     # Reaction fluxes (approximated from reaction quotients)
     ax3 = plt.subplot(2, 3, 3)
     Q = solution['reaction_quotients']
-    
+
     # Key regulatory fluxes
     key_reactions = [0, 2, 5, 6]  # HK, PFK, PK, ATPase
     reaction_names = ['HK', 'PFK', 'PK', 'ATPase']
-    
+
     for i, rxn_idx in enumerate(key_reactions):
         flux_approx = np.log(Q[:, rxn_idx] / Keq[rxn_idx])  # Proportional to flux
         ax3.plot(t, flux_approx, label=reaction_names[i], linewidth=2)
-    
+
     ax3.set_title('Key Reaction Fluxes')
     ax3.set_xlabel('Time')
     ax3.set_ylabel('Log Flux (arbitrary units)')
     ax3.legend()
     ax3.grid(True, alpha=0.3)
-    
+
     # External drive
     ax4 = plt.subplot(2, 3, 4)
     drive_values = np.array([atp_oscillation(time) for time in t])
@@ -660,7 +660,7 @@ def glycolysis_oscillation_example():
     ax4.set_ylabel('Drive Strength')
     ax4.legend()
     ax4.grid(True, alpha=0.3)
-    
+
     # Phase portrait (G6P vs ATP)
     ax5 = plt.subplot(2, 3, 5)
     g6p = solution['concentrations']['G6P']
@@ -672,37 +672,37 @@ def glycolysis_oscillation_example():
     ax5.set_ylabel('ATP Concentration (mM)')
     ax5.legend()
     ax5.grid(True, alpha=0.3)
-    
+
     # Frequency analysis
     ax6 = plt.subplot(2, 3, 6)
     from scipy.fft import fft, fftfreq
-    
+
     # FFT of ATP concentration
     dt = t[1] - t[0]
     atp_fft = fft(atp - np.mean(atp))
     freqs = fftfreq(len(atp), dt)
-    
+
     # Plot power spectrum (positive frequencies only)
     pos_freqs = freqs[:len(freqs)//2]
     power = np.abs(atp_fft[:len(freqs)//2])
-    
+
     ax6.semilogy(pos_freqs, power, 'r-', linewidth=2)
     ax6.set_title('ATP Oscillation Frequency Spectrum')
     ax6.set_xlabel('Frequency (Hz)')
     ax6.set_ylabel('Power')
     ax6.grid(True, alpha=0.3)
     ax6.set_xlim(0, 1.0)
-    
+
     plt.tight_layout()
     plt.show()
-    
+
     # Print analysis
     print(f"\nAnalysis Results:")
     print(f"Simulation time: {t[-1]:.1f} time units")
     print(f"ATP range: {np.min(atp):.3f} - {np.max(atp):.3f} mM")
     print(f"G6P range: {np.min(g6p):.3f} - {np.max(g6p):.3f} mM")
     print(f"ATP/ADP ratio range: {np.min(atp_adp_ratio):.2f} - {np.max(atp_adp_ratio):.2f}")
-    
+
     # Find oscillation period
     from scipy.signal import find_peaks
     peaks, _ = find_peaks(atp, height=np.mean(atp))
@@ -711,7 +711,7 @@ def glycolysis_oscillation_example():
         frequency = 1.0 / period
         print(f"Oscillation period: {period:.2f} time units")
         print(f"Oscillation frequency: {frequency:.3f} Hz")
-    
+
     print("Glycolysis oscillation example completed!")
 
 if __name__ == "__main__":
@@ -723,6 +723,321 @@ if __name__ == "__main__":
 - Oscillatory dynamics
 - Energy charge analysis
 - Frequency domain analysis
+
+---
+
+## Control System Examples
+
+### CVXPY-Based Control Examples
+
+#### Sparse Control Optimization
+
+**File:** `examples/cvx_sparse_control.py`
+
+Demonstrates L1-regularized control design for minimal control effort.
+
+```python
+from llrq import CVXController, CVXObjectives, CVXConstraints
+
+# Create sparse control objective
+objective = CVXObjectives.sparse_control(sparsity_weight=0.1)
+constraints = CVXConstraints.box_bounds(u_min=-2, u_max=2)
+
+result = controller.compute_cvx_control(
+    objective_fn=objective,
+    constraints_fn=constraints,
+    x_target=np.array([0.5, -0.5])
+)
+```
+
+**Key Features:**
+- L1 penalty for sparse solutions
+- Box constraints on control inputs
+- Automatic sparsity detection
+- Performance comparison with dense control
+
+#### Constrained Control Design
+
+**File:** `examples/cvx_constrained_control.py`
+
+Shows how to design control with multiple constraints including budgets, bounds, and steady-state requirements.
+
+```python
+# Multiple constraints
+constraints = CVXConstraints.combine(
+    CVXConstraints.box_bounds(u_min=-1, u_max=1),
+    CVXConstraints.control_budget(total_budget=3.0, norm_type=1),
+    CVXConstraints.steady_state()
+)
+```
+
+**Key Features:**
+- Multiple simultaneous constraints
+- Budget constraints (L1/L2 norms)
+- Steady-state enforcement
+- Feasibility analysis
+
+#### Custom Objective Functions
+
+**File:** `examples/cvx_custom_objective.py`
+
+Advanced example showing how to create custom objectives and constraints for specialized control problems.
+
+```python
+def custom_entropy_objective(variables, params):
+    u = variables["u"]
+    x = variables["x"]
+
+    # Custom entropy-aware cost
+    control_cost = cp.sum_squares(u)
+    entropy_cost = cp.quad_form(x, params["L"])  # Onsager matrix
+
+    return control_cost + 0.1 * entropy_cost
+```
+
+**Key Features:**
+- Custom CVXPY objective functions
+- Integration with thermodynamic accounting
+- Callback-based constraint definition
+- Advanced optimization techniques
+
+### Frequency-Domain Control Examples
+
+#### Sinusoidal Control Design
+
+**File:** `examples/frequency_space_control.py`
+
+Complete example of designing sinusoidal inputs for periodic steady states.
+
+```python
+from llrq import FrequencySpaceController
+
+freq_controller = FrequencySpaceController.from_llrq_solver(solver)
+
+# Design 1 Hz oscillation with phase shift
+omega = 2 * np.pi * 1.0  # 1 Hz
+X_target = np.array([1.0]) * np.exp(1j * np.pi/2)  # 90° phase
+
+U_optimal = freq_controller.design_sinusoidal_control(
+    X_target=X_target, omega=omega, lam=0.001
+)
+```
+
+**Key Features:**
+- Frequency response computation
+- Optimal sinusoidal design
+- Phase control capabilities
+- Integration with time-domain simulation
+
+#### Frequency Space Simulation
+
+**File:** `examples/frequency_space_simulation.py`
+
+Shows integration between frequency-domain design and time-domain simulation.
+
+```python
+# Design in frequency domain
+U_complex = freq_controller.design_sinusoidal_control(X_target, omega)
+
+# Convert to time-domain control function
+def control_func(t):
+    return np.real(U_complex * np.exp(1j * omega * t))
+
+# Simulate with LLRQ solver
+sol = solver.solve(t, u=control_func)
+```
+
+**Key Features:**
+- Frequency-to-time domain conversion
+- Periodic steady-state analysis
+- FFT validation of results
+- Bode plot generation
+
+#### Entropy-Aware Frequency Control
+
+**File:** `examples/frequency_entropy_control.py`
+
+Advanced frequency control with thermodynamic entropy awareness.
+
+```python
+# Entropy-penalized frequency design
+def entropy_aware_frequency_design(X_target, omega, L, entropy_weight=0.1):
+    H = freq_controller.compute_frequency_response(omega)
+
+    # Include entropy penalty in design
+    entropy_penalty = entropy_weight * np.eye(H.shape[1])
+
+    # Modified weighted least squares
+    W = np.eye(H.shape[0])
+    A = H.conj().T @ W @ H + 0.01 * np.eye(H.shape[1]) + entropy_penalty
+    b = H.conj().T @ W @ X_target
+
+    return np.linalg.solve(A, b)
+```
+
+**Key Features:**
+- Entropy production minimization
+- Onsager conductance integration
+- Thermodynamically-consistent design
+- Energy efficiency analysis
+
+### LQR and Adaptive Control Examples
+
+#### Complete LQR Example
+
+**File:** `examples/lqr_complete_example.py`
+
+Comprehensive Linear Quadratic Regulator (LQR) design and implementation.
+
+```python
+from llrq.control.lqr import lqr_control
+
+# Design LQR controller
+Q = np.diag([10.0, 1.0])  # State weights
+R = 2.0 * np.eye(1)       # Control weights
+
+K_lqr, P, eigenvals = lqr_control(controller.A, controller.B, Q, R)
+
+# Implement tracking control
+def lqr_tracking_control(t, x_current, x_target):
+    y_current = controller.solver.basis.V.T @ x_current
+    y_target = controller.solver.basis.V.T @ x_target
+    error = y_current - y_target
+    u_controlled = -K_lqr @ error
+    return controller.G @ u_controlled
+```
+
+**Key Features:**
+- Optimal LQR gain computation
+- Tracking control implementation
+- Stability analysis
+- Performance comparison with other methods
+
+#### Integrated Control Demo
+
+**File:** `examples/integrated_control_demo.py`
+
+High-level workflow demonstration using convenience functions.
+
+```python
+from llrq import simulate_to_target, compare_control_methods
+
+# Automatic target reaching
+result = simulate_to_target(
+    solver=solver,
+    target=np.array([0.8, -0.3]),
+    method='lqr',
+    time_horizon=10
+)
+
+# Compare multiple control strategies
+methods = {
+    'proportional': {'type': 'feedback', 'gain': 0.5},
+    'lqr': {'type': 'lqr', 'Q': np.eye(2), 'R': np.eye(1)},
+    'cvx_sparse': {'type': 'cvx', 'objective': 'sparse'}
+}
+
+comparison = compare_control_methods(solver, methods, target)
+comparison.plot_comparison()
+```
+
+**Key Features:**
+- Automated control design
+- Multi-method comparison
+- Performance benchmarking
+- Comprehensive analysis workflows
+
+## Thermodynamic Accounting Examples
+
+### Entropy Production Analysis
+
+**File:** `examples/example_thermodynamic_accounting.py`
+
+Complete thermodynamic accounting analysis with entropy production calculations.
+
+```python
+from llrq import ThermodynamicAccountant
+
+# Set up thermodynamic accountant
+L = np.eye(len(network.reaction_ids))  # Onsager conductance
+accountant = ThermodynamicAccountant(network, onsager_conductance=L)
+
+# Compute entropy production
+entropy_result = accountant.entropy_from_x(t, sol.x)
+
+# Cross-validation with dual accounting
+u_trajectory = np.array([u_func(t_i) for t_i in t])
+dual_result = accountant.dual_entropy_accounting(t, sol.x, u_trajectory)
+
+print(f"Entropy from forces: {dual_result.from_x.sigma_total:.4f}")
+print(f"Entropy from drives: {dual_result.from_u.sigma_total:.4f}")
+print(f"Energy balance residual: {dual_result.balance['residual_integral']:.4f}")
+```
+
+**Key Features:**
+- Entropy calculation from reaction forces
+- Dual accounting validation
+- Energy balance diagnostics
+- Onsager matrix handling
+
+### Entropy Production Demo
+
+**File:** `examples/entropy_production_demo.py`
+
+Interactive demonstration of entropy production under different control strategies.
+
+```python
+# Compare entropy production for different control strategies
+strategies = {
+    'No Control': lambda t: np.zeros(2),
+    'Constant Drive': lambda t: np.array([0.5, -0.3]),
+    'Sinusoidal Drive': lambda t: np.array([0.5*np.sin(0.5*t), -0.3*np.cos(0.7*t)]),
+    'Optimized Control': optimized_control_function
+}
+
+entropy_totals = {}
+for name, u_func in strategies.items():
+    sol = solver.solve(t, u=u_func)
+    entropy_result = accountant.entropy_from_x(t, sol.x)
+    entropy_totals[name] = entropy_result.sigma_total
+```
+
+**Key Features:**
+- Control strategy comparison
+- Entropy production visualization
+- Energy efficiency analysis
+- Thermodynamic optimization insights
+
+### Entropy-Aware Control
+
+**File:** `examples/entropy_aware_control.py`
+
+Integration of thermodynamic accounting with control optimization.
+
+```python
+from llrq import create_entropy_aware_cvx_controller
+
+# Create entropy-aware CVX controller
+controller = create_entropy_aware_cvx_controller(solver, reactions, L)
+
+# Multi-objective optimization with entropy penalty
+entropy_obj = CVXObjectives.multi_objective({
+    'tracking': 1.0,
+    'control': 0.1,
+    'entropy': 0.05  # Penalize entropy production
+})
+
+result = controller.compute_cvx_control(
+    objective_fn=entropy_obj,
+    x_target=target_forces
+)
+```
+
+**Key Features:**
+- Entropy-penalized control design
+- Multi-objective optimization
+- Thermodynamic efficiency
+- Energy-minimal control strategies
 
 ---
 

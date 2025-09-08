@@ -13,10 +13,11 @@ Comprehensive documentation for the LLRQ (Log-Linear Reaction Quotient) package.
 ### [API Reference](api-reference.html)
 Complete API documentation with all classes, methods, and functions. Essential for developers working with the LLRQ package programmatically.
 
-### [Tutorials](tutorials.html)  
+### [Tutorials](tutorials.html)
 Step-by-step tutorials covering:
 - Basic reaction network setup
 - Advanced dynamics analysis
+- Control system design
 - Integration with other tools
 - Custom network construction
 
@@ -26,6 +27,38 @@ Mathematical foundations and theoretical background:
 - Thermodynamic principles
 - Comparison with mass action kinetics
 - Mathematical proofs and derivations
+
+## Control Systems
+
+### [CVXPY-Based Control Optimization](cvx-control.html)
+Advanced control design using convex optimization:
+- Custom objective functions and constraints
+- Sparse control and multi-objective optimization
+- Pre-built templates for common control problems
+- Integration with thermodynamic accounting
+
+### [Frequency-Domain Control Design](frequency-control.html)
+Sinusoidal control design in frequency space:
+- Frequency response analysis and Bode plots
+- Optimal sinusoidal input design
+- Entropy-aware frequency control
+- Integration with time-domain simulation
+
+### [Advanced Control Features](advanced-control.html)
+Comprehensive control system capabilities:
+- LQR optimal control design
+- Adaptive parameter estimation
+- Control simulation workflows
+- Performance analysis and comparison utilities
+
+## Thermodynamic Analysis
+
+### [Thermodynamic Accounting](thermodynamics.html)
+Entropy production and energy balance analysis:
+- Entropy calculation from reaction forces and external drives
+- Energy balance diagnostics and validation
+- Onsager conductance matrix handling
+- Integration with control design for entropy-aware systems
 
 ## Interactive Tools
 
@@ -43,6 +76,10 @@ Interactive comparison between LLRQ and traditional mass action kinetics:
 | **API Reference** | Complete function documentation | Developers, advanced users |
 | **Tutorials** | Step-by-step guides | Learning, implementation |
 | **Theory** | Mathematical foundations | Researchers, theorists |
+| **CVXPY Control** | Optimization-based control design | Advanced control applications |
+| **Frequency Control** | Sinusoidal control in frequency domain | Oscillatory systems, energy harvesting |
+| **Advanced Control** | LQR, adaptive, simulation workflows | Comprehensive control system design |
+| **Thermodynamic Accounting** | Entropy and energy balance analysis | Thermodynamic validation, efficiency analysis |
 | **Mass Action Simulator** | Interactive comparisons | Validation, education |
 
 ## Additional Resources
