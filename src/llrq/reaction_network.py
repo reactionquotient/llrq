@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 from scipy.linalg import lstsq, pinv, svd
 from scipy import sparse
-from scipy.sparse.linalg import svds
+from scipy.sparse.linalg import svds, lsqr, spsolve, eigsh
 
 
 class ReactionNetwork:
@@ -97,6 +97,140 @@ class ReactionNetwork:
         # Cache properties
         self._conservation_matrix = None
         self._null_space = None
+
+    def _sparse_lstsq(
+        self, A: Union[np.ndarray, sparse.spmatrix], b: np.ndarray, rtol: float = 1e-12
+    ) -> Tuple[np.ndarray, float]:
+        """Solve least squares problem with sparse-aware methods.
+
+        Args:
+            A: Coefficient matrix (can be sparse or dense)
+            b: Right-hand side vector
+            rtol: Relative tolerance for convergence
+
+        Returns:
+            Tuple of (solution, residual_norm)
+        """
+        if self._use_sparse and sparse.issparse(A):
+            # Use sparse iterative least squares
+            x, istop, itn, r1norm = lsqr(A, b, atol=rtol, btol=rtol)[:4]
+            return x, r1norm
+        else:
+            # Fall back to dense method
+            if sparse.issparse(A):
+                A = A.toarray()
+            x, residuals, rank, s = lstsq(A, b)
+            # Handle both scalar and array residuals
+            if hasattr(residuals, "__len__") and len(residuals) > 0:
+                resid_norm = np.sqrt(residuals[0])
+            else:
+                resid_norm = np.linalg.norm(A @ x - b)
+            return x, resid_norm
+
+    def _sparse_nullspace(self, M: Union[np.ndarray, sparse.spmatrix], rtol: float = 1e-12) -> np.ndarray:
+        """Compute nullspace with sparse-aware methods.
+
+        Args:
+            M: Input matrix
+            rtol: Relative tolerance for rank determination
+
+        Returns:
+            Array with columns spanning the nullspace of M
+        """
+        if M.size == 0:
+            return np.empty((M.shape[1], 0))
+
+        if self._use_sparse and sparse.issparse(M) and min(M.shape) > 50:
+            # Use sparse SVD for large matrices
+            try:
+                # Estimate rank using sparse SVD
+                k = min(min(M.shape) - 1, 100)
+                U, s, Vt = svds(M, k=k, return_singular_vectors="vh")
+
+                # Sort by singular values (descending)
+                idx = np.argsort(s)[::-1]
+                s = s[idx]
+                Vt = Vt[idx, :]
+
+                rank = np.sum(s > rtol * s[0]) if len(s) > 0 else 0
+
+                if rank < M.shape[1]:
+                    # Check if we need more singular vectors
+                    if rank == len(s) and len(s) < M.shape[1]:
+                        # Fall back to dense for accurate nullspace
+                        M_dense = M.toarray() if sparse.issparse(M) else M
+                        return self._nullspace(M_dense, rtol)
+                    else:
+                        return Vt[rank:].T
+                else:
+                    return np.empty((M.shape[1], 0))
+            except Exception:
+                # Fall back to dense computation
+                M_dense = M.toarray() if sparse.issparse(M) else M
+                return self._nullspace(M_dense, rtol)
+        else:
+            # Use dense method for small matrices or when not sparse
+            M_dense = M.toarray() if sparse.issparse(M) else M
+            return self._nullspace(M_dense, rtol)
+
+    def _sparse_left_nullspace(self, M: Union[np.ndarray, sparse.spmatrix], rtol: float = 1e-12) -> np.ndarray:
+        """Compute left nullspace with sparse-aware methods."""
+        if sparse.issparse(M):
+            return self._sparse_nullspace(M.T, rtol)
+        else:
+            return self._left_nullspace(M, rtol)
+
+    def _sparse_pinv(self, M: Union[np.ndarray, sparse.spmatrix], rtol: float = 1e-12) -> np.ndarray:
+        """Compute pseudoinverse with sparse-aware methods.
+
+        Args:
+            M: Input matrix
+            rtol: Relative tolerance
+
+        Returns:
+            Moore-Penrose pseudoinverse
+        """
+        if self._use_sparse and sparse.issparse(M) and min(M.shape) > 50:
+            # For sparse matrices, use SVD-based approach
+            try:
+                k = min(M.shape) - 1
+                U, s, Vt = svds(M, k=k)
+
+                # Sort by singular values (descending)
+                idx = np.argsort(s)[::-1]
+                s = s[idx]
+                U = U[:, idx]
+                Vt = Vt[idx, :]
+
+                # Filter out small singular values
+                tol = rtol * s[0] if len(s) > 0 else rtol
+                mask = s > tol
+                s_inv = 1.0 / s[mask]
+
+                # M+ = V S+ U^T
+                return Vt[mask, :].T @ np.diag(s_inv) @ U[:, mask].T
+            except Exception:
+                # Fall back to dense pseudoinverse
+                M_dense = M.toarray() if sparse.issparse(M) else M
+                return pinv(M_dense)
+        else:
+            # Use dense pseudoinverse for small matrices
+            M_dense = M.toarray() if sparse.issparse(M) else M
+            return pinv(M_dense)
+
+    def _get_sparse_column(self, j: int) -> np.ndarray:
+        """Extract column j as dense array efficiently.
+
+        Args:
+            j: Column index
+
+        Returns:
+            Column j as 1D array
+        """
+        if self._use_sparse:
+            return self.S.getcol(j).toarray().flatten()
+        else:
+            return self.S[:, j]
 
     @property
     def n_species(self) -> int:
@@ -293,13 +427,8 @@ class ReactionNetwork:
         # 1) Solve N^T x = ln K for x = ln c (particular solution)
         # This encodes detailed balance: Q(c) = K
         NT = N.T
-        # Convert sparse matrix to dense for lstsq compatibility
-        if sparse.issparse(NT):
-            NT_dense = NT.toarray()
-        else:
-            NT_dense = NT
-        x_p, _, _, _ = lstsq(NT_dense, lnK)  # particular solution
-        resid = np.linalg.norm(NT_dense @ x_p - lnK)
+        # Use sparse-aware least squares solver
+        x_p, resid = self._sparse_lstsq(NT, lnK)
 
         # Check thermodynamic consistency (Wegscheider conditions)
         if resid > 1e-8:
@@ -309,7 +438,7 @@ class ReactionNetwork:
             )
 
         # 2) Add general solution: x = x_p + Z y, where Z spans ker(N^T)
-        Z = self._nullspace(NT_dense)
+        Z = self._sparse_nullspace(NT)
         p = Z.shape[1]  # Number of conserved moieties
 
         # If no conserved moieties, equilibrium is unique
@@ -319,9 +448,8 @@ class ReactionNetwork:
 
         # 3) Enforce conservation laws using initial totals
         # L^T c is conserved, where L spans left nullspace of N
-        # Convert N to dense for nullspace computation
-        N_dense = N.toarray() if sparse.issparse(N) else N
-        L = self._left_nullspace(N_dense)
+        # Use sparse-aware left nullspace computation
+        L = self._sparse_left_nullspace(N)
         m = L.T @ c0  # Target conserved totals
 
         # Solve g(y) = L^T exp(x_p + Z y) - m = 0 via Newton's method
@@ -469,54 +597,9 @@ class ReactionNetwork:
             Conservation matrix C where each row is a conservation law vector
         """
         if self._conservation_matrix is None:
-            if self._use_sparse:
-                # For sparse matrices, use sparse SVD
-                if min(self.S.shape) > 0:
-                    try:
-                        # Use sparse SVD to find the rank and null space
-                        k = min(min(self.S.shape) - 1, 50)  # Limit k for efficiency
-                        U, s, Vt = svds(self.S.T, k=k)
-                        # Sort by singular values (svds returns unsorted)
-                        idx = np.argsort(s)[::-1]
-                        s = s[idx]
-                        U = U[:, idx]
-                        Vt = Vt[idx, :]
-
-                        rank = np.sum(s > tol)
-
-                        if k + 1 < self.n_species:  # There might be more null vectors
-                            # Fall back to dense computation for accuracy
-                            S_dense = self.S.toarray()
-                            U_full, s_full, Vt_full = np.linalg.svd(S_dense.T, full_matrices=True)
-                            rank = np.sum(s_full > tol)
-                            if rank < self.n_species:
-                                conservation_vectors = Vt_full[rank:, :]
-                            else:
-                                conservation_vectors = np.empty((0, self.n_species))
-                        else:
-                            if rank < len(s):
-                                conservation_vectors = Vt[rank:, :]
-                            else:
-                                conservation_vectors = np.empty((0, self.n_species))
-                    except Exception:
-                        # Fall back to dense computation
-                        S_dense = self.S.toarray()
-                        U, s, Vt = np.linalg.svd(S_dense.T, full_matrices=True)
-                        rank = np.sum(s > tol)
-                        if rank < self.n_species:
-                            conservation_vectors = Vt[rank:, :]
-                        else:
-                            conservation_vectors = np.empty((0, self.n_species))
-                else:
-                    conservation_vectors = np.empty((0, self.n_species))
-            else:
-                # Dense matrix computation
-                U, s, Vt = np.linalg.svd(self.S.T, full_matrices=True)
-                rank = np.sum(s > tol)
-                if rank < self.n_species:
-                    conservation_vectors = Vt[rank:, :]
-                else:
-                    conservation_vectors = np.empty((0, self.n_species))
+            # Use sparse-aware left nullspace computation
+            # Conservation laws are left nullspace of S: L^T S = 0
+            conservation_vectors = self._sparse_left_nullspace(self.S, tol).T
 
             # Normalize and clean up small numerical errors
             clean_vectors = []
@@ -570,13 +653,29 @@ class ReactionNetwork:
         Returns:
             List of reaction indices that form an independent set
         """
-        U, s, Vt = np.linalg.svd(self.S, full_matrices=False)
-        rank = np.sum(s > tol)
+        # For sparse matrices, use sparse-aware rank estimation
+        if self._use_sparse and min(self.S.shape) > 50:
+            try:
+                # Use sparse SVD to estimate rank
+                k = min(min(self.S.shape) - 1, 100)
+                U, s, Vt = svds(self.S, k=k)
+                rank = np.sum(s > tol * np.max(s)) if len(s) > 0 else 0
+            except Exception:
+                # Fall back to dense computation
+                S_dense = self.S.toarray() if self._use_sparse else self.S
+                U, s, Vt = np.linalg.svd(S_dense, full_matrices=False)
+                rank = np.sum(s > tol)
+        else:
+            # Use dense SVD for small matrices
+            S_dense = self.S.toarray() if self._use_sparse else self.S
+            U, s, Vt = np.linalg.svd(S_dense, full_matrices=False)
+            rank = np.sum(s > tol)
 
-        # Find which columns (reactions) are independent
+        # Find which columns (reactions) are independent using QR
         from scipy.linalg import qr
 
-        Q, R, P = qr(self.S, pivoting=True, mode="economic")
+        S_dense = self.S.toarray() if self._use_sparse else self.S
+        Q, R, P = qr(S_dense, pivoting=True, mode="economic")
         independent_indices = P[:rank].tolist()
 
         return independent_indices
@@ -799,11 +898,8 @@ class ReactionNetwork:
 
         for j in range(self.n_reactions):
             # Get reactant and product stoichiometries
-            # Handle both sparse and dense matrices
-            if self._use_sparse:
-                S_col = self.S[:, j].toarray().flatten()
-            else:
-                S_col = self.S[:, j]
+            # Use helper method for efficient column extraction
+            S_col = self._get_sparse_column(j)
 
             nu_reac = np.maximum(-S_col, 0)  # Reactant coefficients (positive)
             nu_prod = np.maximum(S_col, 0)  # Product coefficients (positive)
@@ -840,12 +936,8 @@ class ReactionNetwork:
 
         # Compute R = D* S (S^T D* S)^(-1)
         STS_D = self.S.T @ D_star @ self.S
-        try:
-            STS_D_inv = np.linalg.inv(STS_D)
-        except np.linalg.LinAlgError:
-            # Use pseudoinverse if singular
-            STS_D_inv = pinv(STS_D)
-            warnings.warn("S^T D* S is singular, using pseudoinverse")
+        # Use sparse-aware pseudoinverse
+        STS_D_inv = self._sparse_pinv(STS_D)
 
         R = D_star @ self.S @ STS_D_inv
 
@@ -869,10 +961,7 @@ class ReactionNetwork:
                 else:
                     nu_reac_i = max(-self.S[i, j], 0)
                 if nu_reac_i > 0:
-                    if self._use_sparse:
-                        S_col = self.S[:, j].toarray().flatten()
-                    else:
-                        S_col = self.S[:, j]
+                    S_col = self._get_sparse_column(j)
                     nu_reac = np.maximum(-S_col, 0)
                     forward_flux = k_plus[j] * np.prod(c_star**nu_reac)
                     J_u[j, i] -= nu_reac_i * forward_flux
@@ -880,10 +969,7 @@ class ReactionNetwork:
                 # Product contribution: +ν_ij^prod * k_j^- * c_i * ∏(c_k)^(ν_kj^prod)
                 nu_prod_i = max(self.S[i, j], 0)
                 if nu_prod_i > 0:
-                    if self._use_sparse:
-                        S_col = self.S[:, j].toarray().flatten()
-                    else:
-                        S_col = self.S[:, j]
+                    S_col = self._get_sparse_column(j)
                     nu_prod = np.maximum(S_col, 0)
                     backward_flux = k_minus[j] * np.prod(c_star**nu_prod)
                     J_u[j, i] += nu_prod_i * backward_flux
@@ -892,21 +978,48 @@ class ReactionNetwork:
 
     def _reduce_to_image_space(self, K: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """Reduce matrix K to Im(S^T) basis."""
-        # Find orthonormal basis for Im(S^T)
-        # Convert sparse to dense for SVD
-        if self._use_sparse:
-            S_T = self.S.T.toarray()
+        # Find orthonormal basis for Im(S^T) using sparse-aware methods
+        if self._use_sparse and min(self.S.shape) > 50:
+            try:
+                # Use sparse SVD for large matrices
+                k = min(min(self.S.shape) - 1, 100)
+                U, s, Vt = svds(self.S.T, k=k)
+
+                # Sort by singular values (descending)
+                idx = np.argsort(s)[::-1]
+                s = s[idx]
+                U = U[:, idx]
+
+                rank = np.sum(s > 1e-12 * s[0]) if len(s) > 0 else 0
+
+                if rank == 0:
+                    warnings.warn("S^T has zero rank, returning original matrix")
+                    return K, np.eye(K.shape[0])
+
+                # Use computed singular vectors as basis
+                B = U[:, :rank]
+            except Exception:
+                # Fall back to dense computation
+                S_T = self.S.T.toarray() if self._use_sparse else self.S.T
+                U, s, Vt = np.linalg.svd(S_T, full_matrices=False)
+                rank = np.sum(s > 1e-12)
+
+                if rank == 0:
+                    warnings.warn("S^T has zero rank, returning original matrix")
+                    return K, np.eye(K.shape[0])
+
+                B = U[:, :rank]
         else:
-            S_T = self.S.T
-        U, s, Vt = np.linalg.svd(S_T, full_matrices=False)
-        rank = np.sum(s > 1e-12)
+            # Use dense SVD for small matrices
+            S_T = self.S.T.toarray() if self._use_sparse else self.S.T
+            U, s, Vt = np.linalg.svd(S_T, full_matrices=False)
+            rank = np.sum(s > 1e-12)
 
-        if rank == 0:
-            warnings.warn("S^T has zero rank, returning original matrix")
-            return K, np.eye(K.shape[0])
+            if rank == 0:
+                warnings.warn("S^T has zero rank, returning original matrix")
+                return K, np.eye(K.shape[0])
 
-        # Basis matrix B (columns are basis vectors)
-        B = U[:, :rank]
+            B = U[:, :rank]
 
         # Reduced matrix K_red = B^T K B
         K_reduced = B.T @ K @ B
@@ -1122,8 +1235,8 @@ class ReactionNetwork:
         # Compute flux Jacobian A = ∂J/∂(ln c)
         A = self._compute_flux_jacobian_ln(concentrations, forward_rates, backward_rates, forward_flux, reverse_flux)
 
-        # Moore-Penrose pseudoinverse of S^T
-        S_T_pinv = np.linalg.pinv(self.S.T)
+        # Moore-Penrose pseudoinverse of S^T using sparse-aware methods
+        S_T_pinv = self._sparse_pinv(self.S.T)
 
         # L = -A @ pinv(S^T)
         L = -A @ S_T_pinv

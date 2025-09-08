@@ -63,7 +63,7 @@ class ThermodynamicAccountant:
             Tuple of (q_t (T,), integral float)
         """
         q_t = np.einsum("ti,ij,tj->t", Y, M, Y, optimize=True)  # T-long vector
-        integral = np.trapz(q_t, t)
+        integral = np.trapezoid(q_t, t)
         return q_t, integral
 
     def _sym_psd(self, M: np.ndarray, eps: Optional[float] = 0.0) -> np.ndarray:
@@ -193,7 +193,7 @@ class ThermodynamicAccountant:
         dVdt_t = np.gradient(V_t, t, edge_order=2)
 
         residual_t = dVdt_t - (-P_relax_t + P_ctrl_t)  # should be ~0 in clean data
-        integ = lambda y: float(np.trapz(y, t))
+        integ = lambda y: float(np.trapezoid(y, t))
 
         balance = dict(
             V_dot_time=dVdt_t,

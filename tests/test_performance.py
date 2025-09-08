@@ -12,6 +12,7 @@ import warnings
 
 import numpy as np
 import pytest
+from scipy import sparse
 
 # Add source directory to path for testing
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -594,6 +595,220 @@ class TestAnalyticalVsNumericalPerformance:
         if result_analytical["method"] == "analytical":
             # Analytical should usually be faster
             assert analytical_time < 2 * numerical_time  # Within factor of 2
+
+
+class TestSparseMatrixPerformance:
+    """Benchmark sparse vs dense matrix operations for performance improvements."""
+
+    def create_sparse_test_network(self, n_species=200, n_reactions=100, sparsity=0.95):
+        """Create a sparse network for performance testing.
+
+        Args:
+            n_species: Number of species
+            n_reactions: Number of reactions
+            sparsity: Target sparsity level (fraction of zeros)
+        """
+        species_ids = [f"S{i}" for i in range(n_species)]
+        reaction_ids = [f"R{j}" for j in range(n_reactions)]
+
+        # Create sparse stoichiometric matrix
+        S = np.zeros((n_species, n_reactions))
+
+        # Each reaction involves only a few species randomly
+        np.random.seed(123)  # For reproducible benchmarks
+        for j in range(n_reactions):
+            n_involved = np.random.randint(2, 4)  # 2-3 species per reaction for higher sparsity
+            species_indices = np.random.choice(n_species, n_involved, replace=False)
+
+            # Assign stoichiometric coefficients
+            for i in species_indices[: n_involved // 2]:
+                S[i, j] = -np.random.randint(1, 3)  # Reactants
+            for i in species_indices[n_involved // 2 :]:
+                S[i, j] = np.random.randint(1, 3)  # Products
+
+        # Ensure target sparsity by zeroing out random entries if needed
+        actual_sparsity = 1.0 - np.count_nonzero(S) / S.size
+        while actual_sparsity < sparsity - 0.02 and np.count_nonzero(S) > 0:
+            # Zero out some random non-zero entries
+            rows, cols = np.nonzero(S)
+            n_to_zero = max(1, int(0.05 * len(rows)))
+            indices_to_zero = np.random.choice(len(rows), n_to_zero, replace=False)
+            for idx in indices_to_zero:
+                S[rows[idx], cols[idx]] = 0
+            actual_sparsity = 1.0 - np.count_nonzero(S) / S.size
+
+        print(f"Created network with {n_species} species, {n_reactions} reactions, sparsity={actual_sparsity:.3f}")
+
+        return species_ids, reaction_ids, S
+
+    @pytest.mark.slow
+    def test_sparse_vs_dense_conservation_laws_performance(self):
+        """Benchmark conservation law computation: sparse vs dense."""
+        sizes = [(100, 50), (200, 100), (500, 200)]
+
+        for n_species, n_reactions in sizes:
+            print(f"\nBenchmarking conservation laws: {n_species} species, {n_reactions} reactions")
+
+            species_ids, reaction_ids, S = self.create_sparse_test_network(n_species, n_reactions)
+
+            # Dense network
+            network_dense = ReactionNetwork(species_ids, reaction_ids, S, use_sparse=False)
+
+            # Sparse network
+            S_sparse = sparse.csr_matrix(S)
+            network_sparse = ReactionNetwork(species_ids, reaction_ids, S_sparse, use_sparse=True)
+
+            # Benchmark dense computation
+            start_time = time.time()
+            C_dense = network_dense.find_conservation_laws()
+            time_dense = time.time() - start_time
+
+            # Benchmark sparse computation
+            start_time = time.time()
+            C_sparse = network_sparse.find_conservation_laws()
+            time_sparse = time.time() - start_time
+
+            print(f"  Dense: {time_dense:.3f}s, Sparse: {time_sparse:.3f}s, Speedup: {time_dense/time_sparse:.2f}x")
+
+            # Verify results are consistent
+            assert C_dense.shape == C_sparse.shape
+
+            # Performance expectations depend on matrix size and sparsity
+            # Small matrices have overhead that may make sparse slower
+            if network_sparse.sparsity > 0.95 and n_species >= 500:
+                # Only expect speedup for very sparse, large matrices
+                assert time_sparse <= 2 * time_dense, "Sparse should be competitive for large sparse matrices"
+            elif n_species < 200:
+                # For small matrices, sparse may be slower due to overhead - that's OK
+                assert time_sparse <= 5 * time_dense, "Sparse shouldn't be much slower for small matrices"
+            else:
+                # Medium matrices should be at least competitive
+                assert time_sparse <= 3 * time_dense, "Sparse should be reasonably competitive"
+
+    @pytest.mark.slow
+    def test_sparse_vs_dense_reaction_quotients_performance(self):
+        """Benchmark reaction quotient computation: sparse vs dense."""
+        sizes = [(200, 100), (500, 250), (1000, 500)]
+
+        for n_species, n_reactions in sizes:
+            print(f"\nBenchmarking reaction quotients: {n_species} species, {n_reactions} reactions")
+
+            species_ids, reaction_ids, S = self.create_sparse_test_network(n_species, n_reactions)
+            concentrations = np.random.uniform(0.1, 5.0, n_species)
+
+            # Dense network
+            network_dense = ReactionNetwork(species_ids, reaction_ids, S, use_sparse=False)
+
+            # Sparse network
+            S_sparse = sparse.csr_matrix(S)
+            network_sparse = ReactionNetwork(species_ids, reaction_ids, S_sparse, use_sparse=True)
+
+            # Benchmark dense computation (multiple iterations)
+            n_iterations = 100
+            start_time = time.time()
+            for _ in range(n_iterations):
+                Q_dense = network_dense.compute_reaction_quotients(concentrations)
+            time_dense = time.time() - start_time
+
+            # Benchmark sparse computation
+            start_time = time.time()
+            for _ in range(n_iterations):
+                Q_sparse = network_sparse.compute_reaction_quotients(concentrations)
+            time_sparse = time.time() - start_time
+
+            print(f"  Dense: {time_dense:.3f}s, Sparse: {time_sparse:.3f}s, Speedup: {time_dense/time_sparse:.2f}x")
+
+            # Verify results are consistent
+            np.testing.assert_array_almost_equal(Q_dense, Q_sparse, decimal=8)
+
+            # Sparse should be competitive
+            assert time_sparse < 3 * time_dense, "Sparse should not be much slower than dense"
+
+    @pytest.mark.slow
+    def test_sparse_vs_dense_equilibrium_computation_performance(self):
+        """Benchmark equilibrium computation: sparse vs dense."""
+        n_species, n_reactions = 100, 80
+        print(f"\nBenchmarking equilibrium computation: {n_species} species, {n_reactions} reactions")
+
+        species_ids, reaction_ids, S = self.create_sparse_test_network(n_species, n_reactions)
+
+        # Random rate constants and initial concentrations
+        k_plus = np.random.uniform(0.5, 3.0, n_reactions)
+        k_minus = np.random.uniform(0.5, 3.0, n_reactions)
+        initial_conc = np.random.uniform(0.5, 2.0, n_species)
+
+        # Dense network
+        network_dense = ReactionNetwork(species_ids, reaction_ids, S, use_sparse=False)
+
+        # Sparse network
+        S_sparse = sparse.csr_matrix(S)
+        network_sparse = ReactionNetwork(species_ids, reaction_ids, S_sparse, use_sparse=True)
+
+        try:
+            # Benchmark dense computation
+            start_time = time.time()
+            c_eq_dense, info_dense = network_dense.compute_equilibrium(k_plus, k_minus, initial_conc)
+            time_dense = time.time() - start_time
+
+            # Benchmark sparse computation
+            start_time = time.time()
+            c_eq_sparse, info_sparse = network_sparse.compute_equilibrium(k_plus, k_minus, initial_conc)
+            time_sparse = time.time() - start_time
+
+            print(f"  Dense: {time_dense:.3f}s, Sparse: {time_sparse:.3f}s, Speedup: {time_dense/time_sparse:.2f}x")
+
+            # Verify results are consistent
+            np.testing.assert_array_almost_equal(c_eq_dense, c_eq_sparse, decimal=6)
+
+            # Sparse should be competitive or faster
+            assert time_sparse < 5 * time_dense, "Sparse should not be much slower"
+
+        except ValueError as e:
+            print(f"  Skipped due to thermodynamic inconsistency: {e}")
+
+    def test_sparse_matrix_memory_usage(self):
+        """Test memory efficiency of sparse matrices."""
+        n_species, n_reactions = 1000, 500
+
+        species_ids, reaction_ids, S = self.create_sparse_test_network(n_species, n_reactions, sparsity=0.98)
+
+        # Dense matrix size
+        dense_memory = S.nbytes
+
+        # Sparse matrix size
+        S_sparse = sparse.csr_matrix(S)
+        sparse_memory = S_sparse.data.nbytes + S_sparse.indices.nbytes + S_sparse.indptr.nbytes
+
+        memory_ratio = sparse_memory / dense_memory
+        print(f"\nMemory usage - Dense: {dense_memory/1024**2:.1f}MB, Sparse: {sparse_memory/1024**2:.1f}MB")
+        print(f"Memory ratio (sparse/dense): {memory_ratio:.3f}")
+
+        # For highly sparse matrices, sparse should use much less memory
+        assert memory_ratio < 0.5, "Sparse matrices should use significantly less memory"
+
+    def test_auto_sparsity_detection_performance(self):
+        """Test performance of automatic sparsity detection."""
+        sizes = [(50, 30), (100, 60), (200, 120)]
+
+        for n_species, n_reactions in sizes:
+            species_ids, reaction_ids, S = self.create_sparse_test_network(n_species, n_reactions)
+
+            # Test automatic detection
+            start_time = time.time()
+            network_auto = ReactionNetwork(species_ids, reaction_ids, S, use_sparse=None)
+            auto_time = time.time() - start_time
+
+            print(
+                f"Auto-detection ({n_species}x{n_reactions}): {auto_time:.4f}s, chose {'sparse' if network_auto.is_sparse else 'dense'}"
+            )
+
+            # Auto-detection should be fast
+            assert auto_time < 1.0, "Auto-detection should be fast"
+
+            # Should choose appropriately based on sparsity
+            actual_sparsity = network_auto.sparsity
+            if actual_sparsity > 0.95:
+                assert network_auto.is_sparse, "Should choose sparse for highly sparse matrices"
 
 
 if __name__ == "__main__":

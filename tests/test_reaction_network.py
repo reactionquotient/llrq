@@ -11,6 +11,7 @@ import sys
 
 import numpy as np
 import pytest
+from scipy import sparse
 
 # Add source directory to path for testing
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -329,6 +330,107 @@ class TestNetworkAnalysis:
 
         # Should mention conservation laws (or lack thereof)
         assert "Conservation" in summary
+
+
+class TestSparseVsDense:
+    """Test that sparse and dense implementations give identical results."""
+
+    @pytest.fixture
+    def sample_network_data(self):
+        """Sample network data for testing."""
+        return {
+            "species_ids": ["A", "B", "C", "D"],
+            "reaction_ids": ["R1", "R2", "R3"],
+            "S": np.array(
+                [
+                    [-1, 1, 0],  # A: consumed in R1, produced in R2
+                    [1, -1, -1],  # B: produced in R1, consumed in R2 and R3
+                    [0, 0, 1],  # C: produced in R3
+                    [0, 1, 0],  # D: produced in R2
+                ]
+            ),
+        }
+
+    @pytest.mark.parametrize("use_sparse", [False, True])
+    def test_reaction_quotients_sparse_vs_dense(self, sample_network_data, use_sparse):
+        """Test reaction quotients with sparse and dense matrices."""
+        S = sample_network_data["S"]
+        if use_sparse:
+            S = sparse.csr_matrix(S)
+
+        network = ReactionNetwork(
+            sample_network_data["species_ids"], sample_network_data["reaction_ids"], S, use_sparse=use_sparse
+        )
+
+        concentrations = np.array([2.0, 1.5, 0.5, 3.0])
+        quotients = network.compute_reaction_quotients(concentrations)
+
+        # Expected values computed manually
+        # Q1 = [B]/[A] = 1.5/2.0 = 0.75
+        # Q2 = [A]*[D]/[B] = 2.0*3.0/1.5 = 4.0
+        # Q3 = [C]/[B] = 0.5/1.5 = 1/3
+        expected = np.array([0.75, 4.0, 1.0 / 3.0])
+
+        np.testing.assert_array_almost_equal(quotients, expected, decimal=10)
+
+    @pytest.mark.parametrize("use_sparse", [False, True])
+    def test_conservation_laws_sparse_vs_dense(self, sample_network_data, use_sparse):
+        """Test conservation laws with sparse and dense matrices."""
+        S = sample_network_data["S"]
+        if use_sparse:
+            S = sparse.csr_matrix(S)
+
+        network = ReactionNetwork(
+            sample_network_data["species_ids"], sample_network_data["reaction_ids"], S, use_sparse=use_sparse
+        )
+
+        C = network.find_conservation_laws()
+
+        # Verify conservation laws: C @ S = 0
+        if C.shape[0] > 0:
+            S_matrix = network.S.toarray() if use_sparse else network.S
+            CS = C @ S_matrix
+            np.testing.assert_array_almost_equal(CS, 0, decimal=8)
+
+    def test_sparse_dense_consistency(self, sample_network_data):
+        """Test that sparse and dense versions give identical results."""
+        # Create both versions
+        network_dense = ReactionNetwork(
+            sample_network_data["species_ids"], sample_network_data["reaction_ids"], sample_network_data["S"], use_sparse=False
+        )
+
+        network_sparse = ReactionNetwork(
+            sample_network_data["species_ids"],
+            sample_network_data["reaction_ids"],
+            sparse.csr_matrix(sample_network_data["S"]),
+            use_sparse=True,
+        )
+
+        # Test various operations
+        concentrations = np.array([2.0, 1.5, 0.5, 3.0])
+
+        # Reaction quotients
+        Q_dense = network_dense.compute_reaction_quotients(concentrations)
+        Q_sparse = network_sparse.compute_reaction_quotients(concentrations)
+        np.testing.assert_array_almost_equal(Q_dense, Q_sparse, decimal=10)
+
+        # Conservation laws
+        C_dense = network_dense.find_conservation_laws()
+        C_sparse = network_sparse.find_conservation_laws()
+        assert C_dense.shape == C_sparse.shape
+
+        # Stoichiometry matrices
+        A_dense = network_dense.get_reactant_stoichiometry_matrix()
+        A_sparse = network_sparse.get_reactant_stoichiometry_matrix()
+        if sparse.issparse(A_sparse):
+            A_sparse = A_sparse.toarray()
+        np.testing.assert_array_equal(A_dense, A_sparse)
+
+        B_dense = network_dense.get_product_stoichiometry_matrix()
+        B_sparse = network_sparse.get_product_stoichiometry_matrix()
+        if sparse.issparse(B_sparse):
+            B_sparse = B_sparse.toarray()
+        np.testing.assert_array_equal(B_dense, B_sparse)
 
 
 class TestFromSBMLData:
