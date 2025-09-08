@@ -12,6 +12,7 @@ from scipy import sparse
 import time
 
 from .sbml_parser import SBMLParser, SBMLParseError
+from .yaml_parser import load_yaml_model, YAMLParseError
 from .reaction_network import ReactionNetwork
 from .llrq_dynamics import LLRQDynamics
 
@@ -20,6 +21,7 @@ class GenomeScaleAnalyzer:
     """Analyzer for genome-scale metabolic models with performance optimizations.
 
     This class provides methods for efficient analysis of large-scale models:
+    - Supports both SBML (.xml/.sbml) and YAML (.yml/.yaml) formats
     - Streaming SBML parsing for very large files
     - Model subsetting and pathway extraction
     - Compartment-aware analysis
@@ -27,23 +29,34 @@ class GenomeScaleAnalyzer:
     - Performance monitoring
     """
 
-    def __init__(self, sbml_file: str, lazy_load: bool = True):
+    def __init__(self, model_file: str, lazy_load: bool = True):
         """Initialize genome-scale analyzer.
 
         Args:
-            sbml_file: Path to SBML file
+            model_file: Path to model file (.xml/.sbml for SBML, .yml/.yaml for YAML)
             lazy_load: If True, delay loading detailed information until needed
 
         Raises:
-            FileNotFoundError: If SBML file does not exist
+            FileNotFoundError: If model file does not exist
+            ValueError: If file format is not supported
         """
         import os
 
-        if not os.path.exists(sbml_file):
-            raise FileNotFoundError(f"SBML file not found: {sbml_file}")
+        if not os.path.exists(model_file):
+            raise FileNotFoundError(f"Model file not found: {model_file}")
 
-        self.sbml_file = sbml_file
+        self.model_file = model_file
         self.lazy_load = lazy_load
+
+        # Determine file format
+        file_ext = os.path.splitext(model_file)[1].lower()
+        if file_ext in [".xml", ".sbml"]:
+            self.file_format = "sbml"
+        elif file_ext in [".yml", ".yaml"]:
+            self.file_format = "yaml"
+        else:
+            raise ValueError(f"Unsupported file format: {file_ext}. Use .xml/.sbml for SBML or .yml/.yaml for YAML")
+
         self._parser: Optional[SBMLParser] = None
         self._network_data: Optional[Dict[str, Any]] = None
         self._network: Optional[ReactionNetwork] = None
@@ -60,16 +73,22 @@ class GenomeScaleAnalyzer:
     def _load_all(self):
         """Load all model data immediately."""
         start_time = time.time()
-        self._parser = SBMLParser(self.sbml_file)
-        self._network_data = self._parser.extract_network_data()
+        if self.file_format == "sbml":
+            self._parser = SBMLParser(self.model_file)
+            self._network_data = self._parser.extract_network_data()
+        else:  # yaml
+            # Load YAML data directly since we don't need the parser object for YAML
+            self._network_data = load_yaml_model(self.model_file)
         self.performance_metrics["full_load_time"] = time.time() - start_time
 
     @property
-    def parser(self) -> SBMLParser:
-        """Get SBML parser, loading if needed."""
+    def parser(self) -> Optional[SBMLParser]:
+        """Get SBML parser, loading if needed. Returns None for YAML files."""
+        if self.file_format == "yaml":
+            return None
         if self._parser is None:
             start_time = time.time()
-            self._parser = SBMLParser(self.sbml_file)
+            self._parser = SBMLParser(self.model_file)
             self.performance_metrics["parser_load_time"] = time.time() - start_time
         return self._parser
 
@@ -78,8 +97,13 @@ class GenomeScaleAnalyzer:
         """Get network data, loading if needed."""
         if self._network_data is None:
             start_time = time.time()
-            self._network_data = self.parser.extract_network_data()
+            if self.file_format == "sbml":
+                assert self.parser is not None
+                self._network_data = self.parser.extract_network_data()
+            else:  # yaml
+                self._network_data = load_yaml_model(self.model_file)
             self.performance_metrics["network_data_time"] = time.time() - start_time
+
         return self._network_data
 
     def get_model_statistics(self) -> Dict[str, Any]:
@@ -172,7 +196,7 @@ class GenomeScaleAnalyzer:
                 stoichiometric_matrix=data["stoichiometric_matrix"],
                 species_info=data["species"],
                 reaction_info=data["reactions"],
-                parameters=data["parameters"],
+                parameters=data.get("parameters", {}),  # Handle missing parameters (e.g., in YAML files)
                 use_sparse=use_sparse,
             )
 
@@ -292,7 +316,7 @@ class GenomeScaleAnalyzer:
         submodel_data = {
             "species": species_info,
             "reactions": reactions,
-            "parameters": data["parameters"],  # Keep all parameters
+            "parameters": data.get("parameters", {}),  # Handle missing parameters (e.g., in YAML files)
             "stoichiometric_matrix": S_sub,
             "species_ids": species_ids,
             "reaction_ids": reaction_ids,
@@ -302,7 +326,8 @@ class GenomeScaleAnalyzer:
 
         # Create new analyzer with submodel data
         analyzer = GenomeScaleAnalyzer.__new__(GenomeScaleAnalyzer)
-        analyzer.sbml_file = f"{self.sbml_file}_submodel"
+        analyzer.model_file = f"{self.model_file}_submodel"
+        analyzer.file_format = self.file_format
         analyzer.lazy_load = False
         analyzer._parser = None
         analyzer._network_data = submodel_data
@@ -508,33 +533,33 @@ class GenomeScaleAnalyzer:
             print(f"\\n✓ No major numerical stability issues detected")
 
 
-def load_genome_scale_model(sbml_file: str, lazy_load: bool = True) -> GenomeScaleAnalyzer:
+def load_genome_scale_model(model_file: str, lazy_load: bool = True) -> GenomeScaleAnalyzer:
     """Convenient function to load a genome-scale model.
 
     Args:
-        sbml_file: Path to SBML file
+        model_file: Path to model file (.xml/.sbml for SBML, .yml/.yaml for YAML)
         lazy_load: Whether to delay loading until needed
 
     Returns:
         GenomeScaleAnalyzer instance
     """
-    return GenomeScaleAnalyzer(sbml_file, lazy_load=lazy_load)
+    return GenomeScaleAnalyzer(model_file, lazy_load=lazy_load)
 
 
 def compare_model_sizes(models: Dict[str, str]) -> Dict[str, Dict[str, Any]]:
     """Compare statistics across multiple models.
 
     Args:
-        models: Dictionary mapping model names to SBML file paths
+        models: Dictionary mapping model names to model file paths
 
     Returns:
         Dictionary with model statistics for comparison
     """
     comparison = {}
 
-    for name, sbml_file in models.items():
+    for name, model_file in models.items():
         try:
-            analyzer = GenomeScaleAnalyzer(sbml_file, lazy_load=False)
+            analyzer = GenomeScaleAnalyzer(model_file, lazy_load=False)
             stats = analyzer.get_model_statistics()
             comparison[name] = stats
         except Exception as e:

@@ -1,0 +1,9 @@
+reaction_key,reaction_id,description,name,delta_g_kj_mol,keq,data_quality,notes
+PGI,r_0467,G6P ↔ F6P,glucose-6-phosphate isomerase,-0.8899999999999864,1.4319282397237194,COMPLETE,
+TPI,r_1054,DHAP ↔ GAP,triose-phosphate isomerase,1.4499999999999886,0.5571485319530791,COMPLETE,
+GAPDH,r_0486,"GAP+Pi+NAD ↔ 1,3-BPG+NADH",glyceraldehyde-3-phosphate dehydrogenase,-2.150000000000034,2.380475432374789,COMPLETE,
+PGK,r_0892,"1,3-BPG+ADP ↔ 3-PG+ATP",phosphoglycerate kinase,8.42999999999995,0.03335246189133635,COMPLETE,
+PGM,r_0893,3-PG ↔ 2-PG,phosphoglycerate mutase,0.020000000000038654,0.9919645491208398,COMPLETE,
+ENO,r_0366,2-PG ↔ PEP,enolase,-0.8700000000000045,1.4204220506909697,COMPLETE,
+ADH,r_0163,AcAld+NADH ↔ EtOH+NAD,alcohol dehydrogenase (ethanol to acetaldehyde),14.920000000000016,0.0024329270591217375,COMPLETE,
+GPD,r_0490,DHAP+NADH ↔ G3P+NAD,glycerol-3-phosphate dehydrogenase (fad),,,INCOMPLETE,Missing ΔG° for: s_0688

@@ -9,6 +9,7 @@ import os
 import tempfile
 from unittest.mock import MagicMock, patch
 import warnings
+import yaml
 
 import numpy as np
 import pytest
@@ -220,6 +221,220 @@ class TestGenomeScaleAnalyzer:
             analyzer.print_summary()
         except Exception as e:
             pytest.fail(f"print_summary raised an exception: {e}")
+
+
+class TestGenomeScaleAnalyzerYAMLSupport:
+    """Test GenomeScaleAnalyzer support for YAML files - this would have failed before the fix."""
+
+    def create_test_yaml_content(self):
+        """Create test YAML content mimicking yeast-GEM structure."""
+        yaml_data = [
+            {"metaData": {"id": "test_model", "name": "Test Model", "version": "1.0"}},
+            {
+                "metabolites": [
+                    {
+                        "id": "s_001",
+                        "name": "Glucose",
+                        "compartment": "c",
+                        "formula": "C6H12O6",
+                        "charge": 0,
+                        "deltaG": -915.0,  # kJ/mol
+                    },
+                    {
+                        "id": "s_002",
+                        "name": "ATP",
+                        "compartment": "c",
+                        "formula": "C10H16N5O13P3",
+                        "charge": -4,
+                        "deltaG": -2292.0,  # kJ/mol
+                    },
+                ]
+            },
+            {
+                "reactions": [
+                    {
+                        "id": "r_001",
+                        "name": "Glucose transport",
+                        "metabolites": {"s_001": -1, "s_002": 1},  # s_001 -> s_002
+                        "lower_bound": 0,
+                        "upper_bound": 1000,
+                        "gene_reaction_rule": "gene1 or gene2",
+                        "subsystem": ["Transport"],
+                    },
+                ]
+            },
+        ]
+        return yaml.dump(yaml_data, default_flow_style=False)
+
+    def test_yaml_file_loading_with_lazy_load(self):
+        """Test that GenomeScaleAnalyzer can load YAML files with lazy loading."""
+        yaml_content = self.create_test_yaml_content()
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            f.write(yaml_content)
+            temp_file = f.name
+
+        try:
+            # This would have failed before the fix with SBML parsing error
+            analyzer = GenomeScaleAnalyzer(temp_file, lazy_load=True)
+
+            # Verify file format detection
+            assert analyzer.file_format == "yaml"
+
+            # Verify lazy loading - data should not be loaded yet
+            assert analyzer._network_data is None
+            assert analyzer._parser is None
+
+            # Access network_data should trigger loading
+            data = analyzer.network_data
+            assert data is not None
+            assert "species_ids" in data
+            assert "reaction_ids" in data
+            assert "stoichiometric_matrix" in data
+
+            # For YAML files, parser should return None
+            assert analyzer.parser is None
+
+        finally:
+            import os
+
+            os.unlink(temp_file)
+
+    def test_yaml_file_loading_with_eager_load(self):
+        """Test that GenomeScaleAnalyzer can load YAML files with eager loading."""
+        yaml_content = self.create_test_yaml_content()
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            f.write(yaml_content)
+            temp_file = f.name
+
+        try:
+            # This would have failed before the fix
+            analyzer = GenomeScaleAnalyzer(temp_file, lazy_load=False)
+
+            # Verify data is already loaded
+            assert analyzer._network_data is not None
+            assert "full_load_time" in analyzer.performance_metrics
+
+            # Verify correct format detection
+            assert analyzer.file_format == "yaml"
+
+        finally:
+            import os
+
+            os.unlink(temp_file)
+
+    def test_yaml_model_statistics(self):
+        """Test model statistics computation for YAML files."""
+        yaml_content = self.create_test_yaml_content()
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            f.write(yaml_content)
+            temp_file = f.name
+
+        try:
+            analyzer = GenomeScaleAnalyzer(temp_file, lazy_load=False)
+            stats = analyzer.get_model_statistics()
+
+            # Check basic structure - same as SBML files
+            assert "n_species" in stats
+            assert "n_reactions" in stats
+            assert "n_compartments" in stats
+            assert "compartments" in stats
+
+            # For our test YAML, we expect 2 species, 1 reaction
+            assert stats["n_species"] == 2
+            assert stats["n_reactions"] == 1
+
+        finally:
+            import os
+
+            os.unlink(temp_file)
+
+    def test_yaml_network_creation(self):
+        """Test network creation from YAML files."""
+        yaml_content = self.create_test_yaml_content()
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            f.write(yaml_content)
+            temp_file = f.name
+
+        try:
+            analyzer = GenomeScaleAnalyzer(temp_file, lazy_load=False)
+
+            # Test network creation
+            network = analyzer.create_network()
+            assert isinstance(network, ReactionNetwork)
+            assert "network_creation_time" in analyzer.performance_metrics
+
+            # Verify network properties
+            assert len(network.species_ids) == 2
+            assert len(network.reaction_ids) == 1
+
+        finally:
+            import os
+
+            os.unlink(temp_file)
+
+    def test_load_genome_scale_model_yaml(self):
+        """Test load_genome_scale_model convenience function with YAML files."""
+        yaml_content = self.create_test_yaml_content()
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml_content)
+            temp_file = f.name
+
+        try:
+            # This would have failed before the fix
+            analyzer = load_genome_scale_model(temp_file)
+            assert isinstance(analyzer, GenomeScaleAnalyzer)
+            assert analyzer.file_format == "yaml"
+
+        finally:
+            import os
+
+            os.unlink(temp_file)
+
+    def test_unsupported_file_format(self):
+        """Test error handling for unsupported file formats."""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+            f.write("some content")
+            temp_file = f.name
+
+        try:
+            with pytest.raises(ValueError, match="Unsupported file format"):
+                GenomeScaleAnalyzer(temp_file)
+        finally:
+            import os
+
+            os.unlink(temp_file)
+
+    def test_yaml_vs_xml_extension_detection(self):
+        """Test that file format detection works correctly for different extensions."""
+        yaml_content = self.create_test_yaml_content()
+
+        # Test .yml extension
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            f.write(yaml_content)
+            yml_file = f.name
+
+        # Test .yaml extension
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml_content)
+            yaml_file = f.name
+
+        try:
+            analyzer_yml = GenomeScaleAnalyzer(yml_file, lazy_load=True)
+            analyzer_yaml = GenomeScaleAnalyzer(yaml_file, lazy_load=True)
+
+            assert analyzer_yml.file_format == "yaml"
+            assert analyzer_yaml.file_format == "yaml"
+
+        finally:
+            import os
+
+            os.unlink(yml_file)
+            os.unlink(yaml_file)
 
 
 class TestSparseMatrixIntegration:
@@ -523,7 +738,8 @@ class TestErrorHandling:
         """Test error handling for empty submodel extractions."""
         # Create a minimal analyzer with mock data
         analyzer = GenomeScaleAnalyzer.__new__(GenomeScaleAnalyzer)
-        analyzer.sbml_file = "test"
+        analyzer.model_file = "test"
+        analyzer.file_format = "sbml"
         analyzer.lazy_load = False
         analyzer._parser = None
         analyzer._network_data = {

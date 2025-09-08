@@ -1,0 +1,9 @@
+,u_glc_in,u_pyk_pull,u_pdc_push,u_ATP_boost,u_ADP_boost
+x1: PGI  (G6P ↔ F6P),-0.5,0.0,0.0,0.0,0.0
+x2: TPI  (DHAP ↔ GAP),-0.3,0.0,0.0,0.0,0.0
+"x3: GAPDH (GAP+Pi+NAD ↔ 1,3-BPG+NADH)",0.0,0.0,0.0,0.0,0.0
+"x4: PGK  (1,3-BPG+ADP ↔ 3-PG+ATP)",0.0,0.0,0.0,0.6,-0.6
+x5: PGM  (3-PG ↔ 2-PG),0.0,0.0,0.0,0.0,0.0
+x6: ENO  (2-PG ↔ PEP),0.0,-0.5,0.0,0.0,0.0
+x7: ADH  (AcAld+NADH ↔ EtOH+NAD),0.0,0.0,-0.4,0.0,0.0
+x8: GPD  (DHAP+NADH ↔ G3P+NAD),0.0,0.0,0.0,0.0,0.0

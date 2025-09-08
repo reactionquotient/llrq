@@ -502,16 +502,16 @@ def main():
         print("\nComputing pathway flux dynamics...")
         pathway_fluxes = switcher.compute_pathway_fluxes(sim_results)
 
-        # Create visualization
-        print("\nGenerating visualization...")
-        fig = switcher.visualize_results(sim_results, controller_info, pathway_fluxes)
+        # # Create visualization
+        # print("\nGenerating visualization...")
+        # fig = switcher.visualize_results(sim_results, controller_info, pathway_fluxes)
 
         # Save results
-        plt.savefig("yeast_metabolic_switching_demo.png", dpi=300, bbox_inches="tight")
-        print("\nResults saved to: yeast_metabolic_switching_demo.png")
+        # plt.savefig("yeast_metabolic_switching_demo.png", dpi=300, bbox_inches="tight")
+        # print("\nResults saved to: yeast_metabolic_switching_demo.png")
 
         # Show interactive plot if in interactive environment
-        plt.show()
+        # plt.show()
 
         # Print summary
         print("\n" + "=" * 50)
