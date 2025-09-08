@@ -33,7 +33,15 @@ class GenomeScaleAnalyzer:
         Args:
             sbml_file: Path to SBML file
             lazy_load: If True, delay loading detailed information until needed
+
+        Raises:
+            FileNotFoundError: If SBML file does not exist
         """
+        import os
+
+        if not os.path.exists(sbml_file):
+            raise FileNotFoundError(f"SBML file not found: {sbml_file}")
+
         self.sbml_file = sbml_file
         self.lazy_load = lazy_load
         self._parser: Optional[SBMLParser] = None
@@ -142,7 +150,10 @@ class GenomeScaleAnalyzer:
 
     def create_network(self, use_sparse: Optional[bool] = None) -> ReactionNetwork:
         """Create ReactionNetwork with optimal settings for genome-scale models."""
-        if self._network is None:
+        # Check if we need to create/recreate network
+        recreate_network = self._network is None or (use_sparse is not None and self._network.is_sparse != use_sparse)
+
+        if recreate_network:
             start_time = time.time()
             data = self.network_data
 
@@ -167,6 +178,7 @@ class GenomeScaleAnalyzer:
 
             self.performance_metrics["network_creation_time"] = time.time() - start_time
 
+        assert self._network is not None
         return self._network
 
     def extract_compartment_submodel(self, compartment_ids: Union[str, List[str]]) -> "GenomeScaleAnalyzer":

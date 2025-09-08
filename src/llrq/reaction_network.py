@@ -157,13 +157,33 @@ class ReactionNetwork:
             return np.maximum(self.S, 0)
 
     def _nullspace(self, M: np.ndarray, rtol: float = 1e-12) -> np.ndarray:
-        """Right nullspace of M (columns span ker(M))."""
+        """Right nullspace of M (columns span ker(M)).
+
+        Args:
+            M: Input matrix (must be dense numpy array)
+            rtol: Relative tolerance for rank determination
+
+        Returns:
+            Array with columns spanning the nullspace of M
+        """
+        if M.size == 0:
+            return np.empty((M.shape[1], 0))
         U, s, Vt = svd(M, full_matrices=True)
+        if s.size == 0:
+            return np.eye(M.shape[1])
         rank = (s > rtol * s.max()).sum()
         return Vt[rank:].T  # shape: cols = nullity
 
     def _left_nullspace(self, M: np.ndarray, rtol: float = 1e-12) -> np.ndarray:
-        """Left nullspace of M: columns L with L^T M = 0 (i.e., ker(M^T))."""
+        """Left nullspace of M: columns L with L^T M = 0 (i.e., ker(M^T)).
+
+        Args:
+            M: Input matrix (must be dense numpy array)
+            rtol: Relative tolerance for rank determination
+
+        Returns:
+            Array with columns L such that L^T @ M = 0
+        """
         return self._nullspace(M.T, rtol)
 
     def get_initial_concentrations(self) -> np.ndarray:
@@ -273,8 +293,13 @@ class ReactionNetwork:
         # 1) Solve N^T x = ln K for x = ln c (particular solution)
         # This encodes detailed balance: Q(c) = K
         NT = N.T
-        x_p, _, _, _ = lstsq(NT, lnK)  # particular solution
-        resid = np.linalg.norm(NT @ x_p - lnK)
+        # Convert sparse matrix to dense for lstsq compatibility
+        if sparse.issparse(NT):
+            NT_dense = NT.toarray()
+        else:
+            NT_dense = NT
+        x_p, _, _, _ = lstsq(NT_dense, lnK)  # particular solution
+        resid = np.linalg.norm(NT_dense @ x_p - lnK)
 
         # Check thermodynamic consistency (Wegscheider conditions)
         if resid > 1e-8:
@@ -284,7 +309,7 @@ class ReactionNetwork:
             )
 
         # 2) Add general solution: x = x_p + Z y, where Z spans ker(N^T)
-        Z = self._nullspace(NT)
+        Z = self._nullspace(NT_dense)
         p = Z.shape[1]  # Number of conserved moieties
 
         # If no conserved moieties, equilibrium is unique
@@ -294,7 +319,9 @@ class ReactionNetwork:
 
         # 3) Enforce conservation laws using initial totals
         # L^T c is conserved, where L spans left nullspace of N
-        L = self._left_nullspace(N)
+        # Convert N to dense for nullspace computation
+        N_dense = N.toarray() if sparse.issparse(N) else N
+        L = self._left_nullspace(N_dense)
         m = L.T @ c0  # Target conserved totals
 
         # Solve g(y) = L^T exp(x_p + Z y) - m = 0 via Newton's method
@@ -772,8 +799,14 @@ class ReactionNetwork:
 
         for j in range(self.n_reactions):
             # Get reactant and product stoichiometries
-            nu_reac = np.maximum(-self.S[:, j], 0)  # Reactant coefficients (positive)
-            nu_prod = np.maximum(self.S[:, j], 0)  # Product coefficients (positive)
+            # Handle both sparse and dense matrices
+            if self._use_sparse:
+                S_col = self.S[:, j].toarray().flatten()
+            else:
+                S_col = self.S[:, j]
+
+            nu_reac = np.maximum(-S_col, 0)  # Reactant coefficients (positive)
+            nu_prod = np.maximum(S_col, 0)  # Product coefficients (positive)
 
             # Compute φ_j = k_j^+ * ∏(c_i*)^(ν_ij^reac)
             phi_forward = k_plus[j] * np.prod(c_star**nu_reac)
@@ -831,16 +864,27 @@ class ReactionNetwork:
                 # ∂v_j/∂u_i where u_i = ln(c_i), v_j is net flux of reaction j
 
                 # Reactant contribution: -ν_ij^reac * k_j^+ * c_i * ∏(c_k)^(ν_kj^reac)
-                nu_reac_i = max(-self.S[i, j], 0)
+                if self._use_sparse:
+                    nu_reac_i = max(-self.S[i, j], 0)
+                else:
+                    nu_reac_i = max(-self.S[i, j], 0)
                 if nu_reac_i > 0:
-                    nu_reac = np.maximum(-self.S[:, j], 0)
+                    if self._use_sparse:
+                        S_col = self.S[:, j].toarray().flatten()
+                    else:
+                        S_col = self.S[:, j]
+                    nu_reac = np.maximum(-S_col, 0)
                     forward_flux = k_plus[j] * np.prod(c_star**nu_reac)
                     J_u[j, i] -= nu_reac_i * forward_flux
 
                 # Product contribution: +ν_ij^prod * k_j^- * c_i * ∏(c_k)^(ν_kj^prod)
                 nu_prod_i = max(self.S[i, j], 0)
                 if nu_prod_i > 0:
-                    nu_prod = np.maximum(self.S[:, j], 0)
+                    if self._use_sparse:
+                        S_col = self.S[:, j].toarray().flatten()
+                    else:
+                        S_col = self.S[:, j]
+                    nu_prod = np.maximum(S_col, 0)
                     backward_flux = k_minus[j] * np.prod(c_star**nu_prod)
                     J_u[j, i] += nu_prod_i * backward_flux
 
@@ -849,7 +893,12 @@ class ReactionNetwork:
     def _reduce_to_image_space(self, K: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """Reduce matrix K to Im(S^T) basis."""
         # Find orthonormal basis for Im(S^T)
-        U, s, Vt = np.linalg.svd(self.S.T, full_matrices=False)
+        # Convert sparse to dense for SVD
+        if self._use_sparse:
+            S_T = self.S.T.toarray()
+        else:
+            S_T = self.S.T
+        U, s, Vt = np.linalg.svd(S_T, full_matrices=False)
         rank = np.sum(s > 1e-12)
 
         if rank == 0:
