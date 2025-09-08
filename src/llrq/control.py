@@ -609,7 +609,7 @@ class ControlledSimulation:
         # Control effort
         if "control_inputs" in result:
             control_effort = np.sum(np.abs(result["control_inputs"]), axis=1)
-            total_control_effort = float(np.trapz(control_effort, result["time"]))
+            total_control_effort = float(np.trapezoid(control_effort, result["time"]))
         else:
             total_control_effort = None
 
