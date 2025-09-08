@@ -1,194 +1,115 @@
 import numpy as np
-from typing import Optional, Tuple
-import warnings
-from scipy.linalg import solve_continuous_are, expm
-
-Array = np.ndarray
-
-
-def _as_psd(mat_or_scalar: Optional[Array], n: int, default: float) -> Array:
-    """Make (n x n) PSD from scalar or matrix."""
-    if mat_or_scalar is None:
-        return default * np.eye(n)
-    M = np.array(mat_or_scalar, dtype=float)
-    if M.ndim == 0:
-        return float(M) * np.eye(n)
-    if M.shape != (n, n):
-        raise ValueError(f"matrix must be {n}x{n}, got {M.shape}")
-    return M
-
-
-def reduce_y_from_Q(B: Array, lnKeq: Array, Q: Array) -> Array:
-    """
-    Map reaction quotients Q (length r) to reduced measurement y (length r_S):
-      y = B^T ( ln(Q) - ln(Keq) )
-    """
-    return B.T @ (np.log(Q) - lnKeq)
-
-
-def reduce_y_from_x(B: Array, x: Array) -> Array:
-    """
-    Map log-deviations x (length r) to reduced measurement y (length r_S):
-      y = B^T x
-    """
-    return B.T @ x
+from scipy.linalg import solve_continuous_are
 
 
 class ReducedKalmanFilterCT:
     """
-    Continuous-time steady-state Kalman filter on the reduced LLRQ model.
-
-    Plant (reduced coordinates):
-        dot y = A y + u_red(t) + d(t),   (process noise with PSD W)
-        z     = C y + v(t),              (measurement noise with PSD V)
-
-    The steady-state Kalman gain solves the dual CARE:
-        A P + P A^T - P C^T V^{-1} C P + W = 0
-        L = P C^T V^{-1}
-
-    The 'step' method advances one Euler step of dt:
-        yhat <- yhat + dt * (A yhat + u_red + L (z - C yhat))
-        (optionally add d(t) externally to u_red if you like)
+    Continuous-time Kalman filter for the reduced LLRQ model.
+    Estimates y from measurements z with dynamics: dy/dt = A*y + B*u + w, z = C*y + v
     """
 
-    def __init__(self, A: Array, C: Optional[Array] = None,
-                 W: Optional[Array] = None, V: Optional[Array] = None):
-        A = np.array(A, dtype=float)
-        n = A.shape[0]
-        if A.shape != (n, n):
-            raise ValueError("A must be square")
-        self.A = A
-        self.C = np.eye(n) if C is None else np.array(C, dtype=float)
-        if self.C.shape != (n, n):
-            raise ValueError("C must be n x n (use an explicit output map otherwise)")
-        self.W = _as_psd(W, n, default=1e-8)
-        self.V = _as_psd(V, n, default=1e-4)
+    def __init__(self, A, C, W, V, B=None):
+        """
+        Args:
+            A: System matrix (rankS x rankS)
+            C: Measurement matrix (rankS x rankS, typically identity)
+            W: Process noise covariance (rankS x rankS)
+            V: Measurement noise covariance (rankS x rankS)
+            B: Input matrix (rankS x m) - optional
+        """
+        self.A = np.array(A, dtype=float)
+        self.C = np.array(C, dtype=float)
+        self.W = np.array(W, dtype=float)
+        self.V = np.array(V, dtype=float)
+        self.B = np.array(B, dtype=float) if B is not None else None
 
-        # Solve steady-state filter Riccati (dual CARE)
+        self.n = self.A.shape[0]  # state dimension
+        self.m = self.C.shape[0]  # measurement dimension
+
+        # Solve steady-state Riccati equation for P
         try:
-            P = solve_continuous_are(self.A.T, self.C.T, self.W, self.V)
-            # Robust solve for V^{-1}
-            try:
-                Vinv = np.linalg.inv(self.V)
-            except np.linalg.LinAlgError:
-                Vinv = np.linalg.pinv(self.V)
-            self.L = P @ self.C.T @ Vinv
-        except Exception as e:
-            warnings.warn(f"CARE solve failed ({e}); using small-gain heuristic.")
-            self.L = 1e-3 * np.eye(n)
+            self.P = solve_continuous_are(self.A.T, self.C.T, self.W, self.V)
+        except:
+            # Fallback to identity if Riccati fails
+            self.P = np.eye(self.n)
 
-        self.yhat = np.zeros(n)
+        # Kalman gain
+        self.K = self.P @ self.C.T @ np.linalg.pinv(self.V)
+
+        # Current estimate
+        self.y_hat = np.zeros(self.n)
 
     @classmethod
-    def from_solver(cls, solver, W: Optional[Array] = None, V: Optional[Array] = None):
+    def from_solver(cls, solver, W, V, C=None):
         """
-        Build from an LLRQSolver (uses reduced dynamics A = -K_red).
+        Create Kalman filter from LLRQ solver.
+
+        Args:
+            solver: LLRQSolver instance
+            W: Process noise covariance
+            V: Measurement noise covariance
+            C: Measurement matrix (defaults to identity)
         """
         B = solver._B
         K_red = B.T @ solver.dynamics.K @ B
         A = -K_red
-        return cls(A=A, C=None, W=W, V=V)
 
-    def reset(self, y0: Optional[Array] = None):
-        self.yhat = np.zeros_like(self.yhat) if y0 is None else np.array(y0, dtype=float)
+        rankS = solver._rankS
+        if C is None:
+            C = np.eye(rankS)
 
-    def step(self, z: Array, dt: float, u_red: Optional[Array] = None) -> Array:
-        """
-        Advance the steady-state CT filter by one Euler step of size dt.
-        Args:
-            z: reduced measurement (n,)
-            dt: step size
-            u_red: known reduced input (n,), e.g. B_red uhat + projected exogenous drive
-        Returns:
-            yhat (n,)
-        """
-        z = np.array(z, dtype=float)
-        n = self.A.shape[0]
-        if z.shape != (n,):
-            raise ValueError(f"z must be shape ({n},)")
-        if u_red is None:
-            u_red = np.zeros(n)
-        # Predictor-corrector (explicit Euler with correction term)
-        innov = z - self.C @ self.yhat
-        self.yhat = self.yhat + dt * (self.A @ self.yhat + u_red + self.L @ innov)
-        return self.yhat.copy()
+        return cls(A=A, C=C, W=W, V=V)
 
-
-class ReducedKalmanFilterDT:
-    """
-    Discrete-time reduced Kalman filter.
-
-    Model:
-        y_{k+1} = A_d y_k + B_d u_k + w_k,   w_k ~ N(0, Qd)
-        z_k     = C   y_k + v_k,             v_k ~ N(0, Rd)
-
-    Uses Joseph-form covariance update for numerical PSD safety.
-    """
-
-    def __init__(self, A_d: Array, B_d: Optional[Array] = None, C: Optional[Array] = None,
-                 Qd: Optional[Array] = None, Rd: Optional[Array] = None):
-        A_d = np.array(A_d, dtype=float)
-        n = A_d.shape[0]
-        if A_d.shape != (n, n):
-            raise ValueError("A_d must be square")
-        self.A_d = A_d
-        self.B_d = np.zeros((n, n)) if B_d is None else np.array(B_d, dtype=float)
-        self.C   = np.eye(n) if C   is None else np.array(C,   dtype=float)
-        self.Qd  = _as_psd(Qd, n, default=1e-6)
-        self.Rd  = _as_psd(Rd, n, default=1e-3)
-        self.yhat = np.zeros(n)
-        self.P    = 1e-2 * np.eye(n)   # initial covariance
-
-    @classmethod
-    def from_solver(cls, solver, dt: float,
-                    Qc: Optional[Array] = None, Rd: Optional[Array] = None,
-                    discretization: str = "euler"):
-        """
-        Build a DT filter from solver by discretizing A = -K_red.
-        - 'euler': A_d = I + A*dt, Qd ≈ Qc*dt  (good for small dt)
-        - 'exact': A_d = expm(A*dt), Qd  ≈ Qc*dt (simple PSD approx; swap if you implement Van Loan)
-        """
-        B = solver._B
-        A = -(B.T @ solver.dynamics.K @ B)
-        n = A.shape[0]
-        if discretization == "exact":
-            A_d = expm(A * dt)
-        elif discretization == "euler":
-            A_d = np.eye(n) + A * dt
+    def reset(self, y0=None):
+        """Reset filter with initial estimate y0."""
+        if y0 is None:
+            self.y_hat = np.zeros(self.n)
         else:
-            raise ValueError("discretization must be 'euler' or 'exact'")
-        Qd = _as_psd(Qc, n, default=1e-6) * dt
-        return cls(A_d=A_d, B_d=None, C=None, Qd=Qd, Rd=Rd)
+            self.y_hat = np.array(y0, dtype=float)
 
-    def reset(self, y0: Optional[Array] = None, P0: Optional[Array] = None):
-        self.yhat = np.zeros_like(self.yhat) if y0 is None else np.array(y0, dtype=float)
-        if P0 is not None:
-            P0 = np.array(P0, dtype=float)
-            if P0.shape != self.P.shape:
-                raise ValueError("P0 has wrong shape")
-            self.P = P0
+    def step(self, z, dt, u_red=None):
+        """
+        Perform one Kalman filter step.
 
-    def predict(self, u: Optional[Array] = None):
-        u = np.zeros(self.A_d.shape[0]) if u is None else np.array(u, dtype=float)
-        self.yhat = self.A_d @ self.yhat + (self.B_d @ u if self.B_d.size else 0.0)
-        self.P = self.A_d @ self.P @ self.A_d.T + self.Qd
+        Args:
+            z: measurement vector (m,)
+            dt: time step
+            u_red: control input in reduced space (optional)
 
-    def update(self, z: Array):
-        z = np.array(z, dtype=float)
-        S = self.C @ self.P @ self.C.T + self.Rd
-        try:
-            S_inv = np.linalg.inv(S)
-        except np.linalg.LinAlgError:
-            S_inv = np.linalg.pinv(S)
-        K = self.P @ self.C.T @ S_inv
-        innov = z - self.C @ self.yhat
-        self.yhat = self.yhat + K @ innov
-        I = np.eye(self.P.shape[0])
-        # Joseph form
-        self.P = (I - K @ self.C) @ self.P @ (I - K @ self.C).T + K @ self.Rd @ K.T
+        Returns:
+            y_hat: updated state estimate
+        """
+        # Predict
+        dydt = self.A @ self.y_hat
+        if u_red is not None and self.B is not None:
+            dydt += self.B @ u_red
 
-    def step(self, z: Array, u: Optional[Array] = None):
-        self.predict(u)
-        self.update(z)
-        return self.yhat.copy()
+        # Simple Euler integration for prediction
+        y_pred = self.y_hat + dt * dydt
 
+        # Update with measurement
+        innovation = z - self.C @ y_pred
+        self.y_hat = y_pred + self.K @ innovation
+
+        return self.y_hat.copy()
+
+
+def reduce_y_from_Q(B, lnKeq_consistent, Q_meas):
+    """
+    Convert measured reaction quotients Q to reduced state y.
+
+    Args:
+        B: Basis matrix (r x rankS)
+        lnKeq_consistent: log equilibrium constants (r,)
+        Q_meas: measured reaction quotients (r,)
+
+    Returns:
+        y: reduced state vector (rankS,)
+    """
+    # Convert Q to log-space deviation from equilibrium
+    x = np.log(Q_meas) - lnKeq_consistent
+
+    # Project to reduced space
+    y = B.T @ x
+
+    return y
