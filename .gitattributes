@@ -1,1 +1,2 @@
 models/*.xml filter=lfs diff=lfs merge=lfs -text
+models/*.yml filter=lfs diff=lfs merge=lfs -text

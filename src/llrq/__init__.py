@@ -24,6 +24,7 @@ from .reaction_network import ReactionNetwork
 
 # Core imports
 from .sbml_parser import SBMLParseError, SBMLParser
+from .yaml_parser import YAMLParseError, YAMLModelParser, load_yaml_model
 from .solver import LLRQSolver
 from .thermodynamic_accounting import ThermodynamicAccountant, AccountingResult, DualAccountingResult
 from .visualization import LLRQVisualizer
@@ -42,10 +43,120 @@ from .genome_scale import GenomeScaleAnalyzer, load_genome_scale_model, compare_
 
 
 # Convenience functions
+def from_model(
+    model_file: str,
+    equilibrium_constants=None,
+    relaxation_matrix=None,
+    external_drive=None,
+    use_genome_scale_analyzer=None,
+    temperature: float = 298.15,
+    compute_keq_from_thermodynamics: bool = True,
+    verbose: bool = False,
+):
+    """Load model (SBML or YAML) and create LLRQ system.
+
+    Args:
+        model_file: Path to model file (.xml for SBML, .yml/.yaml for YAML)
+        equilibrium_constants: Equilibrium constants for each reaction. If None and
+                              YAML contains thermodynamic data, Keq will be computed.
+        relaxation_matrix: Relaxation rate matrix K
+        external_drive: External drive function u(t)
+        use_genome_scale_analyzer: If True, use GenomeScaleAnalyzer for large SBML models.
+                                  If None, auto-detect based on file size.
+        temperature: Temperature for Keq computation from thermodynamic data (K)
+        compute_keq_from_thermodynamics: Whether to compute Keq from ΔG° data in YAML files
+        verbose: Print information about model loading and thermodynamic data
+
+    Returns:
+        Tuple of (network, dynamics, solver, visualizer)
+    """
+    import os
+
+    # Determine file format
+    file_ext = os.path.splitext(model_file)[1].lower()
+
+    if file_ext in [".yml", ".yaml"]:
+        # YAML model with potential thermodynamic data
+        if verbose:
+            print(f"Loading YAML model: {model_file}")
+
+        # Load YAML model data
+        model_data = load_yaml_model(
+            model_file, compute_keq=compute_keq_from_thermodynamics, temperature=temperature, verbose=verbose
+        )
+
+        # Create network from YAML data
+        network = ReactionNetwork(
+            species_ids=model_data["species_ids"],
+            reaction_ids=model_data["reaction_ids"],
+            stoichiometric_matrix=model_data["stoichiometric_matrix"],
+            species_info=model_data["species"],
+            reaction_info=model_data["reactions"],
+        )
+
+        # Use computed Keq if available and not overridden
+        if equilibrium_constants is None and "equilibrium_constants" in model_data:
+            equilibrium_constants = model_data["equilibrium_constants"]
+            if verbose:
+                keq_info = model_data.get("keq_info", {})
+                coverage = keq_info.get("coverage_partial", 0)
+                print(f"Using computed equilibrium constants ({coverage:.1%} reactions with thermodynamic data)")
+
+    elif file_ext in [".xml", ".sbml"]:
+        # SBML model
+        if verbose:
+            print(f"Loading SBML model: {model_file}")
+
+        # Auto-detect if we should use genome-scale analyzer
+        if use_genome_scale_analyzer is None:
+            # Quick check of file size as a heuristic
+            try:
+                file_size_mb = os.path.getsize(model_file) / (1024 * 1024)
+                use_genome_scale_analyzer = file_size_mb > 1.0  # Use for files > 1MB
+            except:
+                use_genome_scale_analyzer = False
+
+        if use_genome_scale_analyzer:
+            # Use genome-scale analyzer for large models
+            analyzer = GenomeScaleAnalyzer(model_file, lazy_load=False)
+            network = analyzer.create_network()
+
+            # Warn about potential performance issues with large models
+            stats = analyzer.get_model_statistics()
+            if stats["n_reactions"] > 1000 and (equilibrium_constants is None or relaxation_matrix is None):
+                import warnings
+
+                warnings.warn(
+                    f"Large model detected ({stats['n_reactions']} reactions). "
+                    "Consider providing equilibrium_constants and relaxation_matrix "
+                    "for better performance and numerical stability.",
+                    UserWarning,
+                )
+        else:
+            # Standard parsing for smaller models
+            parser = SBMLParser(model_file)
+            network_data = parser.extract_network_data()
+            network = ReactionNetwork.from_sbml_data(network_data)
+
+    else:
+        raise ValueError(f"Unsupported file format: {file_ext}. Use .xml/.sbml for SBML or .yml/.yaml for YAML")
+
+    # Create dynamics
+    dynamics = LLRQDynamics(network, equilibrium_constants, relaxation_matrix, external_drive)
+
+    # Create solver and visualizer
+    solver = LLRQSolver(dynamics)
+    visualizer = LLRQVisualizer(solver)
+
+    return network, dynamics, solver, visualizer
+
+
 def from_sbml(
     sbml_file: str, equilibrium_constants=None, relaxation_matrix=None, external_drive=None, use_genome_scale_analyzer=None
 ):
     """Load SBML model and create LLRQ system.
+
+    This is a backward compatibility wrapper around from_model().
 
     Args:
         sbml_file: Path to SBML file or SBML string content
@@ -58,47 +169,14 @@ def from_sbml(
     Returns:
         Tuple of (network, dynamics, solver, visualizer)
     """
-    # Auto-detect if we should use genome-scale analyzer
-    if use_genome_scale_analyzer is None:
-        # Quick check of file size as a heuristic
-        try:
-            import os
-
-            file_size_mb = os.path.getsize(sbml_file) / (1024 * 1024)
-            use_genome_scale_analyzer = file_size_mb > 1.0  # Use for files > 1MB
-        except:
-            use_genome_scale_analyzer = False
-
-    if use_genome_scale_analyzer:
-        # Use genome-scale analyzer for large models
-        analyzer = GenomeScaleAnalyzer(sbml_file, lazy_load=False)
-        network = analyzer.create_network()
-
-        # Warn about potential performance issues with large models
-        stats = analyzer.get_model_statistics()
-        if stats["n_reactions"] > 1000 and (equilibrium_constants is None or relaxation_matrix is None):
-            import warnings
-
-            warnings.warn(
-                f"Large model detected ({stats['n_reactions']} reactions). "
-                "Consider providing equilibrium_constants and relaxation_matrix "
-                "for better performance and numerical stability.",
-                UserWarning,
-            )
-    else:
-        # Standard parsing for smaller models
-        parser = SBMLParser(sbml_file)
-        network_data = parser.extract_network_data()
-        network = ReactionNetwork.from_sbml_data(network_data)
-
-    # Create dynamics
-    dynamics = LLRQDynamics(network, equilibrium_constants, relaxation_matrix, external_drive)
-
-    # Create solver and visualizer
-    solver = LLRQSolver(dynamics)
-    visualizer = LLRQVisualizer(solver)
-
-    return network, dynamics, solver, visualizer
+    return from_model(
+        sbml_file,
+        equilibrium_constants=equilibrium_constants,
+        relaxation_matrix=relaxation_matrix,
+        external_drive=external_drive,
+        use_genome_scale_analyzer=use_genome_scale_analyzer,
+        compute_keq_from_thermodynamics=False,  # Don't compute Keq for SBML files
+    )
 
 
 def simple_reaction(
