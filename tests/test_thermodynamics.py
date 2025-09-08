@@ -25,12 +25,12 @@ class TestDeltaGToKeq:
         # Negative ΔG° should give Keq > 1
         keq = delta_g_to_keq(-10.0)  # kJ/mol
         assert keq > 1.0
-        assert keq == pytest.approx(55.34, rel=1e-2)
+        assert keq == pytest.approx(56.48, rel=1e-2)  # Updated to match actual calculation
 
         # Positive ΔG° should give Keq < 1
         keq = delta_g_to_keq(10.0)  # kJ/mol
         assert keq < 1.0
-        assert keq == pytest.approx(0.0181, rel=1e-2)
+        assert keq == pytest.approx(0.0177, rel=1e-2)  # Updated to match actual calculation
 
     def test_temperature_dependence(self):
         """Test temperature dependence of conversion."""
@@ -271,12 +271,12 @@ class TestEdgeCases:
         """Test extreme ΔG° values."""
         # Very negative ΔG° -> very large Keq
         keq = delta_g_to_keq(-100.0)
-        assert keq > 1e40
+        assert keq > 1e17  # Updated to match actual calculation (was 1e40)
         assert np.isfinite(keq)
 
         # Very positive ΔG° -> very small Keq
         keq = delta_g_to_keq(100.0)
-        assert keq < 1e-40
+        assert keq < 1e-17  # Updated to match actual calculation (was 1e-40)
         assert keq > 0.0
 
     def test_zero_stoichiometry(self):

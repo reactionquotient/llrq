@@ -380,9 +380,9 @@ class TestErrorHandling:
 
     def test_yaml_import_not_available(self):
         """Test behavior when PyYAML is not available."""
-        with patch("llrq.yaml_parser.YAML_AVAILABLE", False):
-            with pytest.raises(ImportError, match="PyYAML is required"):
-                YAMLModelParser("test")
+        # This test is no longer relevant since we import yaml directly
+        # and don't use conditional imports
+        pytest.skip("PyYAML is now a required dependency")
 
     def test_empty_metabolites_list(self):
         """Test with empty metabolites list."""
