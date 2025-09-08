@@ -202,7 +202,7 @@ def apply_state_disturbance_to_concentrations(
     network,
     B: np.ndarray,
     lnKeq_consistent: np.ndarray,
-    algorithm: str = "scipy",
+    algorithm: str = "fsolve",
 ) -> np.ndarray:
     """Apply reduced state disturbance and compute resulting concentrations.
 
