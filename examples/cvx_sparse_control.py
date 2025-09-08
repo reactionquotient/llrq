@@ -18,29 +18,18 @@ import sys
 import os
 import numpy as np
 import matplotlib.pyplot as plt
+import cvxpy as cp
 
 # Add the src directory to the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from llrq import ReactionNetwork, LLRQDynamics, LLRQSolver
 from llrq.control import LLRQController
-
-try:
-    from llrq.cvx_control import CVXController, CVXObjectives, CVXConstraints
-
-    CVXPY_AVAILABLE = True
-except ImportError as e:
-    CVXPY_AVAILABLE = False
-    print(f"CVXpy not available: {e}")
-    print("Install with: pip install 'llrq[cvx]' or pip install cvxpy>=1.7.2")
+from llrq.cvx_control import CVXController, CVXObjectives, CVXConstraints
 
 
 def demo_sparse_control():
     """Demonstrate sparse control design using L1 regularization."""
-    if not CVXPY_AVAILABLE:
-        print("This example requires cvxpy. Skipping demonstration.")
-        return
-
     print("=== CVXpy Sparse Control Demonstration ===\n")
 
     # Create a larger reaction network: A ⇌ B ⇌ C ⇌ D
@@ -146,7 +135,7 @@ def demo_sparse_control():
 
     def minimal_l1_objective(variables, params):
         """Custom objective: minimize L1 norm of control."""
-        return params["cvxpy"].norm(variables["u"], 1)
+        return cp.norm(variables["u"], 1)
 
     def exact_tracking_constraints(variables, params):
         """Custom constraints: exact tracking + steady state."""
@@ -156,18 +145,14 @@ def demo_sparse_control():
         x = variables["x"]
         x_target = params["x_target"]
         tolerance = params.get("tracking_tolerance", 1e-6)
-        constraints.append(params["cvxpy"].norm(x - x_target, 2) <= tolerance)
+        constraints.append(cp.norm(x - x_target, 2) <= tolerance)
 
         return constraints
-
-    # We need to pass cvxpy module to use in constraints
-    import cvxpy as cp
 
     result = cvx_controller.compute_cvx_control(
         objective_fn=minimal_l1_objective,
         constraints_fn=exact_tracking_constraints,
         x_target=x_target,
-        cvxpy=cp,
         tracking_tolerance=1e-8,
     )
 

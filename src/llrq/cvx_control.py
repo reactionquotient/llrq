@@ -12,31 +12,9 @@ import warnings
 from typing import Any, Callable, Dict, List, Optional, Union
 
 import numpy as np
-
-try:
-    import cvxpy as cp
-
-    CVXPY_AVAILABLE = True
-except ImportError:
-    CVXPY_AVAILABLE = False
-    cp = None
+import cvxpy as cp
 
 from .control import LLRQController
-
-
-class CVXPyNotAvailableError(ImportError):
-    """Raised when cvxpy is required but not installed."""
-
-    pass
-
-
-def _check_cvxpy():
-    """Check if cvxpy is available and raise helpful error if not."""
-    if not CVXPY_AVAILABLE:
-        raise CVXPyNotAvailableError(
-            "cvxpy is required for optimization-based control but is not installed. "
-            "Install with: pip install 'llrq[cvx]' or pip install cvxpy>=1.7.2"
-        )
 
 
 class CVXController(LLRQController):
@@ -58,7 +36,6 @@ class CVXController(LLRQController):
                                 If None, controls all reactions.
         """
         super().__init__(solver, controlled_reactions)
-        _check_cvxpy()
 
     def compute_cvx_control(
         self,
@@ -89,8 +66,6 @@ class CVXController(LLRQController):
             - objective_value: Optimal objective value
             - status: Solver status string
         """
-        _check_cvxpy()
-
         # Determine problem dimensions
         r = len(self.network.reaction_ids)
         m = len(self.controlled_reactions)

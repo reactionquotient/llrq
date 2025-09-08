@@ -24,24 +24,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from llrq import ReactionNetwork, LLRQDynamics, LLRQSolver
 from llrq.control import LLRQController
-
-try:
-    from llrq.cvx_control import CVXController, CVXObjectives, CVXConstraints
-    import cvxpy as cp
-
-    CVXPY_AVAILABLE = True
-except ImportError as e:
-    CVXPY_AVAILABLE = False
-    print(f"CVXpy not available: {e}")
-    print("Install with: pip install 'llrq[cvx]' or pip install cvxpy>=1.7.2")
+from llrq.cvx_control import CVXController, CVXObjectives, CVXConstraints
+import cvxpy as cp
 
 
 def demo_constrained_control():
     """Demonstrate various types of constrained control problems."""
-    if not CVXPY_AVAILABLE:
-        print("This example requires cvxpy. Skipping demonstration.")
-        return
-
     print("=== CVXpy Constrained Control Demonstration ===\n")
 
     # Create A ⇌ B ⇌ C reaction network
