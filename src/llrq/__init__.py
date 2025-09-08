@@ -12,7 +12,7 @@ This framework provides:
 
 from typing import Optional
 
-__version__ = "0.0.2"
+__version__ = "0.0.3"
 __author__ = "Steven Diamond"
 __email__ = "steven@gridmatic.com"
 

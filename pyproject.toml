@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "llrq"
-version = "0.0.2"
+version = "0.0.3"
 description = "Log-Linear Reaction Quotient Dynamics: Tractable framework for chemical reaction networks"
 readme = "README.md"
 license = {file = "LICENSE"}
