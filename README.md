@@ -47,6 +47,8 @@ pip install -e .
 - scipy ≥1.7.0
 - matplotlib ≥3.3.0
 - python-libsbml ≥5.19.0
+- tellurium ≥2.2.0
+- cvxpy ≥1.7.2
 
 ## Quick Start
 
@@ -112,19 +114,43 @@ fig = visualizer.plot_dynamics(solution)
 - **`LLRQSolver`**: Solve dynamics with analytical and numerical methods
 - **`LLRQVisualizer`**: Create publication-quality plots
 
+### Control Systems
+
+- **`LLRQController`**: Base controller class with LQR optimal control
+- **`CVXController`**: Advanced optimization-based control using CVXPY
+- **`FrequencySpaceController`**: Frequency-domain control for sinusoidal inputs
+- **`ThermodynamicAccountant`**: Entropy production calculations and energy balance
+
 ### Convenience Functions
 
 - **`llrq.from_sbml()`**: Load SBML model and create complete LLRQ system
 - **`llrq.simple_reaction()`**: Create simple A ⇌ B reaction system
+- **`llrq.simulate_to_target()`**: One-line controlled simulation to target state
+- **`llrq.compare_control_methods()`**: Compare LLRQ vs mass action control performance
+- **`llrq.create_entropy_aware_cvx_controller()`**: Create entropy-aware optimization controller
 
 ## Examples
 
 See the `examples/` directory for complete working examples:
 
+### Basic Usage
 - **`simple_example.py`**: Basic A ⇌ B reaction with visualization
-- **`sbml_example.py`**: Loading and analyzing SBML models
-- **`external_drive_example.py`**: Systems with time-varying external drives
-- **`glycolysis_example.py`**: Oscillatory glycolytic pathway
+- **`linear_vs_mass_action_simple.py`**: Compare LLRQ approximation with mass action
+- **`mass_action_example.py`**: Mass action kinetics integration
+
+### Control Systems
+- **`lqr_complete_example.py`**: Linear Quadratic Regulator control design
+- **`cvx_sparse_control.py`**: Sparse control using L1 regularization
+- **`cvx_constrained_control.py`**: Control with constraints and bounds
+- **`cvx_custom_objective.py`**: Custom optimization objectives
+- **`frequency_space_control.py`**: Frequency-domain control design
+- **`frequency_space_simulation.py`**: Sinusoidal control simulation
+
+### Advanced Features
+- **`entropy_production_demo.py`**: Thermodynamic entropy calculations
+- **`entropy_aware_control.py`**: Control design with entropy constraints
+- **`frequency_entropy_control.py`**: Frequency-domain entropy optimization
+- **`integrated_control_demo.py`**: Complete control workflow demonstration
 
 ## Mathematical Framework
 
@@ -155,13 +181,43 @@ For single reaction A ⇌ B with mass action rates kf, kr:
 - Equilibrium constant: `Keq = kf/kr`
 - Relaxation rate: `k = kr(1 + Keq)` (ensures agreement near equilibrium)
 
+### Control Theory Integration
+The linear dynamics enable direct application of control theory:
+
+**LQR Control**: For quadratic cost J = ∫[x^T Q x + u^T R u]dt:
+```
+u*(t) = -R⁻¹B^T P x(t)
+```
+where P solves the Riccati equation: PA + A^T P - PBR⁻¹B^T P + Q = 0
+
+**Frequency Response**: Transfer function H(s) = (K + sI)⁻¹B enables:
+- Bode plot analysis for stability margins
+- Optimal sinusoidal control design
+- Frequency-domain entropy optimization
+
+**Thermodynamic Constraints**: Entropy production rate:
+```
+dS/dt = x^T K x + x^T u
+```
+enables entropy-aware control design balancing performance and thermodynamic cost.
+
 ## Applications
 
 This framework enables:
+
+### Traditional Applications
 - **Metabolic Engineering**: Optimize pathway design using K as design variable
 - **Drug Discovery**: Predict drug effects throughout metabolic networks
 - **Systems Medicine**: Classify metabolic disorders via eigenvalue analysis
-- **Control Theory**: Apply optimal control to cellular metabolism
+
+### Advanced Control Applications
+- **Optimal Control**: LQR and model predictive control for metabolic regulation
+- **Sparse Control**: L1-regularized control for minimal intervention strategies
+- **Constrained Optimization**: Control with resource limits and safety constraints
+- **Frequency-Domain Design**: Sinusoidal control for periodic metabolic cycles
+- **Thermodynamic Control**: Entropy-aware control balancing performance and energy cost
+- **Robust Control**: Uncertainty-aware control for model variations
+- **Real-Time Control**: Adaptive control with online parameter estimation
 
 ## Citation
 
