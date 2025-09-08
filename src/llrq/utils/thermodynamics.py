@@ -9,6 +9,8 @@ import numpy as np
 import warnings
 from typing import Dict, List, Optional, Tuple, Union
 
+from .equilibrium_utils import _nullspace, _left_nullspace
+
 
 # Physical constants
 R_JOULE_MOL_K = 8.314462618  # Universal gas constant in J/(mol·K)
@@ -311,27 +313,17 @@ def validate_thermodynamic_consistency(
     """
     ln_keq = np.log(keq_values)
 
-    # Check if ln(Keq) satisfies the conservation constraints
-    # This means ln(Keq) should be orthogonal to the left nullspace of S
-    from .equilibrium_utils import _left_nullspace
+    # Check Wegscheider conditions: ln(Keq) must sum to zero around any reaction cycle
+    # Get reaction cycles (nullspace of stoichiometric matrix)
+    cycles = _nullspace(stoichiometric_matrix)  # Shape: (n_reactions, n_cycles)
 
-    # Get conservation matrix (left nullspace of stoichiometric matrix)
-    L = _left_nullspace(stoichiometric_matrix)
-
-    if L.shape[0] == 0 or L.shape[1] == 0:
-        # No conservation laws, so no constraints on Keq
+    if cycles.shape[1] == 0:
+        # No cycles = no constraints on Keq
         return True, 0.0
 
-    # Check violation: L^T * ln(Keq) should be close to zero
-    # L is (n_species, n_conserved), ln_keq is (n_reactions,)
-    # We need L.T @ S.T @ ln_keq = 0 for conservation
-    # But for this simple check, we'll skip if dimensions don't match
-    try:
-        violations = L.T @ ln_keq
-        max_violation = np.max(np.abs(violations))
-    except ValueError:
-        # Dimension mismatch - likely no proper conservation laws
-        return True, 0.0
+    # Check if ln(Keq) sums to zero around all cycles
+    violations = cycles.T @ ln_keq  # Shape: (n_cycles,)
+    max_violation = np.max(np.abs(violations))
 
     is_consistent = max_violation < rtol * np.max(np.abs(ln_keq))
 

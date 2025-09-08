@@ -177,7 +177,7 @@ class TestFormatComparison:
         yaml_rxns = {rxn["id"]: rxn for rxn in yaml_data["reactions"]}
 
         # Check consistency for sample of reactions
-        sample_rxns = list(common_rxn_ids)[:100]
+        sample_rxns = list(common_rxn_ids)
 
         for rxn_id in sample_rxns:
             xml_rxn = xml_rxns[rxn_id]
