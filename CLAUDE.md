@@ -32,6 +32,7 @@ Where Q is reaction quotients, K is relaxation rate matrix, Keq is equilibrium c
 
 #### Control Systems
 - **`control.py`**: `LLRQController` class - implements control strategies based on LLRQ theory with LQR control
+- **`cvx_control.py`**: `CVXController` class - optimization-based control using CVXPY with custom objectives and constraints, pre-built templates for sparse control, constrained optimization, and multi-objective design
 - **`frequency_control.py`**: `FrequencySpaceController` class - frequency-domain control for designing sinusoidal inputs
 - **`control/lqr.py`**: Linear Quadratic Regulator design functions
 
@@ -63,6 +64,7 @@ SBMLParser         Controllers    Visualizer  ThermodynamicAccountant
                       ↓                            ↑
             FrequencySpaceController               │
             LLRQController ─────────────────────────┘
+            CVXController
             AdaptiveController
 ```
 
@@ -71,13 +73,13 @@ SBMLParser         Controllers    Visualizer  ThermodynamicAccountant
 ### Test Suite (`tests/`, 17 files)
 - **Core Tests**: `test_reaction_network.py`, `test_llrq_dynamics.py`, `test_solver.py`
 - **Integration Tests**: `test_mass_action.py`, `test_api_integration.py`, `test_integration.py`
-- **Control Tests**: `test_mass_action_control.py`, `test_frequency_control.py`
+- **Control Tests**: `test_mass_action_control.py`, `test_frequency_control.py`, `test_cvx_control.py`
 - **Specialized Tests**: `test_sbml_parser.py`, `test_thermodynamic_accounting.py`, `test_thermodynamic_accounting_entropy.py`, `test_performance.py`
 - **Edge Cases**: `test_edge_cases.py`, `test_time_varying_drives.py`
 
 ### Examples (`examples/`, 21+ files)
 - **Basic Usage**: `linear_vs_mass_action_simple.py`, `mass_action_example.py`
-- **Control Examples**: `lqr_complete_example.py`, `frequency_space_control.py`, `cycle_closed_loop.py`
+- **Control Examples**: `lqr_complete_example.py`, `frequency_space_control.py`, `frequency_space_simulation.py`, `cycle_closed_loop.py`, `cvx_sparse_control.py`, `cvx_constrained_control.py`, `cvx_custom_objective.py`
 - **Advanced Features**: `example_thermodynamic_accounting.py`, `entropy_production_demo.py`, `integrated_control_demo.py`
 
 ## Key Features by Module
@@ -91,9 +93,19 @@ SBMLParser         Controllers    Visualizer  ThermodynamicAccountant
 
 ### Control Systems
 - **LQR Control**: Optimal control for linear LLRQ systems
+- **CVX-based Optimization**: Custom objective and constraint optimization using CVXPY
+  - **Sparse Control**: L1-regularized control design for minimal actuator usage
+  - **Constrained Control**: Box bounds, budget constraints, state limits
+  - **Multi-objective**: Customizable weights for tracking, control effort, sparsity, entropy
+  - **Robust Control**: Uncertainty-aware control design
+  - **Custom Problems**: Fully flexible callback-based objective and constraint definition
 - **Frequency Control**: Design sinusoidal inputs for periodic steady states
+  - **Frequency Response**: Compute H(iω) = (K + iωI)⁻¹B transfer functions
+  - **Optimal Sinusoidal Control**: Weighted least-squares design with regularization
+  - **Entropy-Aware Control**: Incorporate thermodynamic costs via entropy kernels
+  - **Frequency Analysis**: Bode plots, Nyquist diagrams, frequency sweeps
+  - **Integration with Thermodynamics**: Entropy production rates for sinusoidal signals
 - **Adaptive Control**: Real-time parameter adaptation
-- **Multi-objective**: Balance performance, control effort, and robustness
 
 ### Visualization
 - **Time Series**: Concentration and reaction quotient evolution
@@ -106,6 +118,7 @@ SBMLParser         Controllers    Visualizer  ThermodynamicAccountant
 - **Quasi-Steady Approximation**: Entropy estimation from external drives u(t) when x ≈ K^{-1}u
 - **Energy Balance Diagnostics**: Power balance checks for model validation and noise assessment
 - **Dual Accounting**: Compare entropy estimates from reaction forces vs external drives
+- **Frequency-Domain Methods**: FFT-based entropy calculations and spectral analysis
 - **Onsager Integration**: Seamless integration with existing Onsager conductance calculations
 
 ## Development Guidelines
