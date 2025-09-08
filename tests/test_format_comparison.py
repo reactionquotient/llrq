@@ -165,21 +165,19 @@ class TestFormatComparison:
         yaml_parser = YAMLModelParser(str(yaml_path))
         yaml_data = yaml_parser.parse(compute_keq=False)
 
-        # Find common reactions
+        # Check all reaction IDs are present in both
         xml_rxn_ids = {rxn["id"] for rxn in xml_data["reactions"]}
         yaml_rxn_ids = {rxn["id"] for rxn in yaml_data["reactions"]}
         common_rxn_ids = xml_rxn_ids & yaml_rxn_ids
-
-        assert len(common_rxn_ids) > 1000, f"Too few common reactions: {len(common_rxn_ids)}"
+        assert len(common_rxn_ids) == len(xml_rxn_ids)
+        assert len(common_rxn_ids) == len(yaml_rxn_ids)
 
         # Create lookup dictionaries
         xml_rxns = {rxn["id"]: rxn for rxn in xml_data["reactions"]}
         yaml_rxns = {rxn["id"]: rxn for rxn in yaml_data["reactions"]}
 
-        # Check consistency for sample of reactions
-        sample_rxns = list(common_rxn_ids)
-
-        for rxn_id in sample_rxns:
+        # Check consistency
+        for rxn_id in common_rxn_ids:
             xml_rxn = xml_rxns[rxn_id]
             yaml_rxn = yaml_rxns[rxn_id]
 
@@ -192,8 +190,7 @@ class TestFormatComparison:
             xml_participants = len(xml_rxn.get("reactants", [])) + len(xml_rxn.get("products", []))
             yaml_participants = len(yaml_rxn.get("reactants", [])) + len(yaml_rxn.get("products", []))
 
-            # Allow for small differences in participant count
-            if abs(xml_participants - yaml_participants) > 2:
+            if abs(xml_participants - yaml_participants) > 0:
                 print(f"Participant count difference for {rxn_id}: " f"XML={xml_participants}, YAML={yaml_participants}")
 
 
