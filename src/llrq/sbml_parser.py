@@ -5,9 +5,10 @@ reaction network information needed for log-linear dynamics.
 """
 
 import warnings
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
+from scipy import sparse
 
 try:
     import libsbml
@@ -115,6 +116,8 @@ class SBMLParser:
             - 'products': list of (species_id, stoichiometry) tuples
             - 'reversible': whether reaction is reversible
             - 'kinetic_law': kinetic law information if available
+            - 'fbc_bounds': FBC flux bounds if available (lower_bound, upper_bound)
+            - 'gene_association': Gene-protein-reaction association if available
         """
         reactions = []
 
@@ -144,6 +147,37 @@ class SBMLParser:
                 kinetic_law = reaction.getKineticLaw()
                 kinetic_info = self._parse_kinetic_law(kinetic_law)
 
+            # Extract FBC extension information
+            fbc_bounds = None
+            gene_association = None
+            if self.model.isPackageEnabled("fbc"):
+                fbc_plugin = reaction.getPlugin("fbc")
+                if fbc_plugin:
+                    # Get flux bounds
+                    lower_bound = None
+                    upper_bound = None
+
+                    if fbc_plugin.isSetLowerFluxBound():
+                        lb_id = fbc_plugin.getLowerFluxBound()
+                        lb_param = self.model.getParameter(lb_id)
+                        if lb_param and lb_param.isSetValue():
+                            lower_bound = lb_param.getValue()
+
+                    if fbc_plugin.isSetUpperFluxBound():
+                        ub_id = fbc_plugin.getUpperFluxBound()
+                        ub_param = self.model.getParameter(ub_id)
+                        if ub_param and ub_param.isSetValue():
+                            upper_bound = ub_param.getValue()
+
+                    if lower_bound is not None or upper_bound is not None:
+                        fbc_bounds = (lower_bound, upper_bound)
+
+                    # Get gene association
+                    if fbc_plugin.isSetGeneProductAssociation():
+                        gpa = fbc_plugin.getGeneProductAssociation()
+                        if gpa and gpa.isSetAssociation():
+                            gene_association = gpa.getAssociation().toInfix()
+
             reactions.append(
                 {
                     "id": reaction_id,
@@ -152,6 +186,8 @@ class SBMLParser:
                     "products": products,
                     "reversible": reaction.getReversible(),
                     "kinetic_law": kinetic_info,
+                    "fbc_bounds": fbc_bounds,
+                    "gene_association": gene_association,
                 }
             )
 
@@ -198,12 +234,84 @@ class SBMLParser:
 
         return parameters
 
-    def create_stoichiometric_matrix(self, species_ids: List[str], reactions: List[Dict[str, Any]]) -> np.ndarray:
+    def get_fbc_objectives(self) -> Dict[str, Any]:
+        """Extract FBC optimization objectives from SBML model.
+
+        Returns:
+            Dictionary containing:
+            - 'active_objective': ID of active objective
+            - 'objectives': list of objective dictionaries with 'id', 'sense', 'flux_objectives'
+        """
+        fbc_info: Dict[str, Any] = {"active_objective": None, "objectives": []}
+
+        if not self.model.isPackageEnabled("fbc"):
+            return fbc_info
+
+        fbc_plugin = self.model.getPlugin("fbc")
+        if not fbc_plugin:
+            return fbc_info
+
+        # Get active objective
+        if fbc_plugin.getActiveObjective():
+            fbc_info["active_objective"] = fbc_plugin.getActiveObjectiveId()
+
+        # Get all objectives
+        obj_list = fbc_plugin.getListOfObjectives()
+        for i in range(obj_list.size()):
+            objective = obj_list.get(i)
+            obj_info: Dict[str, Any] = {
+                "id": objective.getId(),
+                "name": objective.getName() or objective.getId(),
+                "sense": objective.getType(),  # MAXIMIZE or MINIMIZE
+                "flux_objectives": [],
+            }
+
+            # Get flux objectives
+            for j in range(objective.getNumFluxObjectives()):
+                flux_obj = objective.getFluxObjective(j)
+                obj_info["flux_objectives"].append(
+                    {"reaction": flux_obj.getReaction(), "coefficient": flux_obj.getCoefficient()}
+                )
+
+            fbc_info["objectives"].append(obj_info)
+
+        return fbc_info
+
+    def get_gene_products(self) -> Dict[str, Dict[str, Any]]:
+        """Extract FBC gene product information.
+
+        Returns:
+            Dictionary mapping gene product ID to gene product information
+        """
+        gene_products: Dict[str, Dict[str, Any]] = {}
+
+        if not self.model.isPackageEnabled("fbc"):
+            return gene_products
+
+        fbc_plugin = self.model.getPlugin("fbc")
+        if not fbc_plugin:
+            return gene_products
+
+        gp_list = fbc_plugin.getListOfGeneProducts()
+        for i in range(gp_list.size()):
+            gp = gp_list.get(i)
+            gene_products[gp.getId()] = {
+                "name": gp.getName() or gp.getId(),
+                "label": gp.getLabel() if gp.isSetLabel() else None,
+                "associated_species": gp.getAssociatedSpecies() if gp.isSetAssociatedSpecies() else None,
+            }
+
+        return gene_products
+
+    def create_stoichiometric_matrix(
+        self, species_ids: List[str], reactions: List[Dict[str, Any]], use_sparse: Optional[bool] = None
+    ) -> Union[np.ndarray, sparse.spmatrix]:
         """Create stoichiometric matrix from reaction information.
 
         Args:
             species_ids: List of species IDs (rows of matrix)
             reactions: List of reaction dictionaries
+            use_sparse: Force sparse (True) or dense (False) format. If None, auto-detect
 
         Returns:
             Stoichiometric matrix S where S[i,j] is stoichiometry of
@@ -212,22 +320,59 @@ class SBMLParser:
         n_species = len(species_ids)
         n_reactions = len(reactions)
 
-        S = np.zeros((n_species, n_reactions))
-
         species_to_idx = {species_id: i for i, species_id in enumerate(species_ids)}
 
-        for j, reaction in enumerate(reactions):
-            # Reactants (negative stoichiometry)
-            for species_id, stoich in reaction["reactants"]:
-                if species_id in species_to_idx:
-                    i = species_to_idx[species_id]
-                    S[i, j] -= stoich
+        # Count non-zero entries to decide on sparse vs dense
+        if use_sparse is None:
+            non_zero_count = 0
+            for reaction in reactions:
+                non_zero_count += len(reaction["reactants"]) + len(reaction["products"])
 
-            # Products (positive stoichiometry)
-            for species_id, stoich in reaction["products"]:
-                if species_id in species_to_idx:
-                    i = species_to_idx[species_id]
-                    S[i, j] += stoich
+            total_entries = n_species * n_reactions
+            sparsity = 1 - (non_zero_count / total_entries) if total_entries > 0 else 0
+            use_sparse = sparsity > 0.95
+
+        if use_sparse:
+            # Build sparse matrix using COO format
+            row_indices = []
+            col_indices = []
+            data = []
+
+            for j, reaction in enumerate(reactions):
+                # Reactants (negative stoichiometry)
+                for species_id, stoich in reaction["reactants"]:
+                    if species_id in species_to_idx:
+                        i = species_to_idx[species_id]
+                        row_indices.append(i)
+                        col_indices.append(j)
+                        data.append(-stoich)
+
+                # Products (positive stoichiometry)
+                for species_id, stoich in reaction["products"]:
+                    if species_id in species_to_idx:
+                        i = species_to_idx[species_id]
+                        row_indices.append(i)
+                        col_indices.append(j)
+                        data.append(stoich)
+
+            # Create sparse matrix
+            S = sparse.csr_matrix((data, (row_indices, col_indices)), shape=(n_species, n_reactions))
+        else:
+            # Dense matrix
+            S = np.zeros((n_species, n_reactions))
+
+            for j, reaction in enumerate(reactions):
+                # Reactants (negative stoichiometry)
+                for species_id, stoich in reaction["reactants"]:
+                    if species_id in species_to_idx:
+                        i = species_to_idx[species_id]
+                        S[i, j] -= stoich
+
+                # Products (positive stoichiometry)
+                for species_id, stoich in reaction["products"]:
+                    if species_id in species_to_idx:
+                        i = species_to_idx[species_id]
+                        S[i, j] += stoich
 
         return S
 
@@ -242,10 +387,14 @@ class SBMLParser:
             - 'stoichiometric_matrix': stoichiometric matrix
             - 'species_ids': ordered list of species IDs
             - 'reaction_ids': ordered list of reaction IDs
+            - 'fbc_objectives': FBC optimization objectives (if available)
+            - 'gene_products': FBC gene product information (if available)
         """
         species_info = self.get_species_info()
         reactions = self.get_reaction_info()
         parameters = self.get_global_parameters()
+        fbc_objectives = self.get_fbc_objectives()
+        gene_products = self.get_gene_products()
 
         species_ids = list(species_info.keys())
         reaction_ids = [r["id"] for r in reactions]
@@ -259,4 +408,6 @@ class SBMLParser:
             "stoichiometric_matrix": S,
             "species_ids": species_ids,
             "reaction_ids": reaction_ids,
+            "fbc_objectives": fbc_objectives,
+            "gene_products": gene_products,
         }

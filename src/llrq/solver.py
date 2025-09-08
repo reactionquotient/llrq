@@ -11,6 +11,8 @@ import numpy as np
 from scipy.integrate import odeint, solve_ivp
 from scipy.linalg import expm
 from scipy.optimize import fsolve, root_scalar
+from scipy import sparse
+from scipy.sparse.linalg import svds
 
 from .llrq_dynamics import LLRQDynamics
 from .reaction_network import ReactionNetwork
@@ -47,7 +49,29 @@ class LLRQSolver:
 
         # --- Build reduced subspace for Im(S^T) (handles cycles) ---
         S = self.network.S  # (n x r)
-        U, s, _ = np.linalg.svd(S.T, full_matrices=False)
+
+        # Handle both sparse and dense matrices for SVD
+        if sparse.issparse(S):
+            # For sparse matrices, use sparse SVD
+            try:
+                if min(S.shape) > 0:
+                    k = min(min(S.shape), 50)  # Limit k for efficiency
+                    U, s, _ = svds(S.T, k=k)
+                    # Sort by singular values (svds returns unsorted)
+                    idx = np.argsort(s)[::-1]
+                    s = s[idx]
+                    U = U[:, idx]
+                else:
+                    U = np.empty((S.shape[1], 0))
+                    s = np.array([])
+            except Exception:
+                # Fall back to dense computation
+                S_dense = S.toarray()
+                U, s, _ = np.linalg.svd(S_dense.T, full_matrices=False)
+        else:
+            # Dense matrix SVD
+            U, s, _ = np.linalg.svd(S.T, full_matrices=False)
+
         tol = max(S.shape) * np.finfo(float).eps * (s[0] if s.size else 1.0)
         rankS = int(np.sum(s > tol))
         self._B = U[:, :rankS]  # (r x rankS), orthonormal columns

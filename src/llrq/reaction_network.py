@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 from scipy.linalg import lstsq, pinv, svd
+from scipy import sparse
+from scipy.sparse.linalg import svds
 
 
 class ReactionNetwork:
@@ -23,10 +25,11 @@ class ReactionNetwork:
         self,
         species_ids: List[str],
         reaction_ids: List[str],
-        stoichiometric_matrix: np.ndarray,
+        stoichiometric_matrix: Union[np.ndarray, sparse.spmatrix],
         species_info: Optional[Dict[str, Dict[str, Any]]] = None,
         reaction_info: Optional[List[Dict[str, Any]]] = None,
         parameters: Optional[Dict[str, Dict[str, Any]]] = None,
+        use_sparse: Optional[bool] = None,
     ):
         """Initialize reaction network.
 
@@ -37,6 +40,8 @@ class ReactionNetwork:
             species_info: Additional species information from SBML
             reaction_info: Additional reaction information from SBML
             parameters: Global parameters from SBML
+            use_sparse: Force sparse (True) or dense (False) matrix format.
+                       If None, auto-detect based on sparsity (>95% sparse uses sparse format)
         """
         # Validate input arguments
         if len(species_ids) == 0:
@@ -46,10 +51,36 @@ class ReactionNetwork:
 
         self.species_ids = species_ids
         self.reaction_ids = reaction_ids
-        self.S = np.array(stoichiometric_matrix, dtype=float)
         self.species_info = species_info or {}
         self.reaction_info = reaction_info or []
         self.parameters = parameters or {}
+
+        # Handle sparse/dense matrix format decision
+        if sparse.issparse(stoichiometric_matrix):
+            S_input = stoichiometric_matrix.astype(float)
+        else:
+            S_input = np.array(stoichiometric_matrix, dtype=float)
+
+        # Auto-detect sparsity if not specified
+        if use_sparse is None:
+            if sparse.issparse(S_input):
+                use_sparse = True
+            else:
+                # Check sparsity level
+                non_zeros = np.count_nonzero(S_input)
+                sparsity = 1 - (non_zeros / S_input.size)
+                use_sparse = sparsity > 0.95
+
+        # Set matrix format
+        if use_sparse and not sparse.issparse(S_input):
+            self.S = sparse.csr_matrix(S_input)
+            self._use_sparse = True
+        elif not use_sparse and sparse.issparse(S_input):
+            self.S = S_input.toarray()
+            self._use_sparse = False
+        else:
+            self.S = S_input
+            self._use_sparse = sparse.issparse(S_input)
 
         # Validate dimensions
         if self.S.shape[0] != len(species_ids):
@@ -77,7 +108,23 @@ class ReactionNetwork:
         """Number of reactions."""
         return len(self.reaction_ids)
 
-    def get_reactant_stoichiometry_matrix(self) -> np.ndarray:
+    @property
+    def is_sparse(self) -> bool:
+        """Whether the stoichiometric matrix is stored in sparse format."""
+        return self._use_sparse
+
+    @property
+    def sparsity(self) -> float:
+        """Sparsity level of the stoichiometric matrix (fraction of zeros)."""
+        if self._use_sparse:
+            non_zeros = self.S.nnz
+            total_elements = self.S.shape[0] * self.S.shape[1]
+        else:
+            non_zeros = np.count_nonzero(self.S)
+            total_elements = self.S.size
+        return 1.0 - (non_zeros / total_elements)
+
+    def get_reactant_stoichiometry_matrix(self) -> Union[np.ndarray, sparse.spmatrix]:
         """Extract reactant stoichiometry matrix A from stoichiometric matrix S.
 
         For reaction j, A[:,j] contains positive stoichiometric coefficients
@@ -85,10 +132,15 @@ class ReactionNetwork:
 
         Returns:
             Reactant stoichiometry matrix A (n_species × n_reactions)
+            Format (sparse/dense) matches the internal storage format
         """
-        return np.maximum(-self.S, 0)
+        if self._use_sparse:
+            # For sparse matrices, use element-wise maximum
+            return sparse.csr_matrix((-self.S).maximum(0))
+        else:
+            return np.maximum(-self.S, 0)
 
-    def get_product_stoichiometry_matrix(self) -> np.ndarray:
+    def get_product_stoichiometry_matrix(self) -> Union[np.ndarray, sparse.spmatrix]:
         """Extract product stoichiometry matrix B from stoichiometric matrix S.
 
         For reaction j, B[:,j] contains positive stoichiometric coefficients
@@ -96,8 +148,13 @@ class ReactionNetwork:
 
         Returns:
             Product stoichiometry matrix B (n_species × n_reactions)
+            Format (sparse/dense) matches the internal storage format
         """
-        return np.maximum(self.S, 0)
+        if self._use_sparse:
+            # For sparse matrices, use element-wise maximum
+            return sparse.csr_matrix(self.S.maximum(0))
+        else:
+            return np.maximum(self.S, 0)
 
     def _nullspace(self, M: np.ndarray, rtol: float = 1e-12) -> np.ndarray:
         """Right nullspace of M (columns span ker(M))."""
@@ -385,42 +442,79 @@ class ReactionNetwork:
             Conservation matrix C where each row is a conservation law vector
         """
         if self._conservation_matrix is None:
-            # Find left null space of S using SVD
-            U, s, Vt = np.linalg.svd(self.S.T, full_matrices=True)
-            rank = np.sum(s > tol)
+            if self._use_sparse:
+                # For sparse matrices, use sparse SVD
+                if min(self.S.shape) > 0:
+                    try:
+                        # Use sparse SVD to find the rank and null space
+                        k = min(min(self.S.shape) - 1, 50)  # Limit k for efficiency
+                        U, s, Vt = svds(self.S.T, k=k)
+                        # Sort by singular values (svds returns unsorted)
+                        idx = np.argsort(s)[::-1]
+                        s = s[idx]
+                        U = U[:, idx]
+                        Vt = Vt[idx, :]
 
-            if rank < self.n_species:
-                # Conservation laws exist
-                # The left null space of S is the right null space of S.T
-                conservation_vectors = Vt[rank:, :]
+                        rank = np.sum(s > tol)
 
-                # Normalize and clean up small numerical errors
-                clean_vectors = []
-                for vec in conservation_vectors:
-                    # Normalize
-                    vec_normalized = vec / np.linalg.norm(vec)
-
-                    # Try to make it have nice integer coefficients if possible
-                    # Scale to make largest absolute component 1
-                    max_coeff = np.max(np.abs(vec_normalized))
-                    if max_coeff > tol:
-                        vec_scaled = vec_normalized / max_coeff
-
-                        # Check if coefficients are close to integers
-                        if np.allclose(vec_scaled, np.round(vec_scaled), atol=1e-6):
-                            vec_clean = np.round(vec_scaled)
-                            # Renormalize to unit vector
-                            vec_clean = vec_clean / np.linalg.norm(vec_clean)
-                            clean_vectors.append(vec_clean)
+                        if k + 1 < self.n_species:  # There might be more null vectors
+                            # Fall back to dense computation for accuracy
+                            S_dense = self.S.toarray()
+                            U_full, s_full, Vt_full = np.linalg.svd(S_dense.T, full_matrices=True)
+                            rank = np.sum(s_full > tol)
+                            if rank < self.n_species:
+                                conservation_vectors = Vt_full[rank:, :]
+                            else:
+                                conservation_vectors = np.empty((0, self.n_species))
                         else:
-                            clean_vectors.append(vec_normalized)
-
-                if clean_vectors:
-                    self._conservation_matrix = np.array(clean_vectors)
+                            if rank < len(s):
+                                conservation_vectors = Vt[rank:, :]
+                            else:
+                                conservation_vectors = np.empty((0, self.n_species))
+                    except Exception:
+                        # Fall back to dense computation
+                        S_dense = self.S.toarray()
+                        U, s, Vt = np.linalg.svd(S_dense.T, full_matrices=True)
+                        rank = np.sum(s > tol)
+                        if rank < self.n_species:
+                            conservation_vectors = Vt[rank:, :]
+                        else:
+                            conservation_vectors = np.empty((0, self.n_species))
                 else:
-                    self._conservation_matrix = np.zeros((0, self.n_species))
+                    conservation_vectors = np.empty((0, self.n_species))
             else:
-                # No conservation laws (full rank)
+                # Dense matrix computation
+                U, s, Vt = np.linalg.svd(self.S.T, full_matrices=True)
+                rank = np.sum(s > tol)
+                if rank < self.n_species:
+                    conservation_vectors = Vt[rank:, :]
+                else:
+                    conservation_vectors = np.empty((0, self.n_species))
+
+            # Normalize and clean up small numerical errors
+            clean_vectors = []
+            for vec in conservation_vectors:
+                # Normalize
+                vec_normalized = vec / np.linalg.norm(vec)
+
+                # Try to make it have nice integer coefficients if possible
+                # Scale to make largest absolute component 1
+                max_coeff = np.max(np.abs(vec_normalized))
+                if max_coeff > tol:
+                    vec_scaled = vec_normalized / max_coeff
+
+                    # Check if coefficients are close to integers
+                    if np.allclose(vec_scaled, np.round(vec_scaled), atol=1e-6):
+                        vec_clean = np.round(vec_scaled)
+                        # Renormalize to unit vector
+                        vec_clean = vec_clean / np.linalg.norm(vec_clean)
+                        clean_vectors.append(vec_clean)
+                    else:
+                        clean_vectors.append(vec_normalized)
+
+            if clean_vectors:
+                self._conservation_matrix = np.array(clean_vectors)
+            else:
                 self._conservation_matrix = np.zeros((0, self.n_species))
 
         return self._conservation_matrix

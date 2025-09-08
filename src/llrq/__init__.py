@@ -37,9 +37,14 @@ except ImportError:
 # CVXpy-based control (required dependency)
 from .cvx_control import CVXController, CVXObjectives, CVXConstraints, create_entropy_aware_cvx_controller
 
+# Genome-scale model utilities
+from .genome_scale import GenomeScaleAnalyzer, load_genome_scale_model, compare_model_sizes
+
 
 # Convenience functions
-def from_sbml(sbml_file: str, equilibrium_constants=None, relaxation_matrix=None, external_drive=None):
+def from_sbml(
+    sbml_file: str, equilibrium_constants=None, relaxation_matrix=None, external_drive=None, use_genome_scale_analyzer=None
+):
     """Load SBML model and create LLRQ system.
 
     Args:
@@ -47,16 +52,44 @@ def from_sbml(sbml_file: str, equilibrium_constants=None, relaxation_matrix=None
         equilibrium_constants: Equilibrium constants for each reaction
         relaxation_matrix: Relaxation rate matrix K
         external_drive: External drive function u(t)
+        use_genome_scale_analyzer: If True, use GenomeScaleAnalyzer for large models.
+                                  If None, auto-detect based on model size.
 
     Returns:
         Tuple of (network, dynamics, solver, visualizer)
     """
-    # Parse SBML
-    parser = SBMLParser(sbml_file)
-    network_data = parser.extract_network_data()
+    # Auto-detect if we should use genome-scale analyzer
+    if use_genome_scale_analyzer is None:
+        # Quick check of file size as a heuristic
+        try:
+            import os
 
-    # Create network
-    network = ReactionNetwork.from_sbml_data(network_data)
+            file_size_mb = os.path.getsize(sbml_file) / (1024 * 1024)
+            use_genome_scale_analyzer = file_size_mb > 1.0  # Use for files > 1MB
+        except:
+            use_genome_scale_analyzer = False
+
+    if use_genome_scale_analyzer:
+        # Use genome-scale analyzer for large models
+        analyzer = GenomeScaleAnalyzer(sbml_file, lazy_load=False)
+        network = analyzer.create_network()
+
+        # Warn about potential performance issues with large models
+        stats = analyzer.get_model_statistics()
+        if stats["n_reactions"] > 1000 and (equilibrium_constants is None or relaxation_matrix is None):
+            import warnings
+
+            warnings.warn(
+                f"Large model detected ({stats['n_reactions']} reactions). "
+                "Consider providing equilibrium_constants and relaxation_matrix "
+                "for better performance and numerical stability.",
+                UserWarning,
+            )
+    else:
+        # Standard parsing for smaller models
+        parser = SBMLParser(sbml_file)
+        network_data = parser.extract_network_data()
+        network = ReactionNetwork.from_sbml_data(network_data)
 
     # Create dynamics
     dynamics = LLRQDynamics(network, equilibrium_constants, relaxation_matrix, external_drive)
@@ -331,6 +364,10 @@ __all__ = [
     "CVXObjectives",
     "CVXConstraints",
     "create_entropy_aware_cvx_controller",
+    # Genome-scale model utilities
+    "GenomeScaleAnalyzer",
+    "load_genome_scale_model",
+    "compare_model_sizes",
     # Convenience functions
     "from_sbml",
     "simple_reaction",
