@@ -6,16 +6,22 @@ This example showcases the enhanced LLRQ package capabilities for
 handling large-scale metabolic models efficiently.
 """
 
+import os
 import sys
 import time
 import warnings
 import numpy as np
 import matplotlib.pyplot as plt
 
-# Add the source directory to path
-sys.path.insert(0, "../src")
-
 from llrq import from_sbml, GenomeScaleAnalyzer, load_genome_scale_model, SBMLParser
+
+# Add source directory to path for testing
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+
+def yeast_file_path():
+    """Get path to yeast SBML file."""
+    return os.path.join(os.path.dirname(__file__), "..", "models", "yeast-GEM.xml")
 
 
 def main():
@@ -24,7 +30,7 @@ def main():
     print("=" * 60)
 
     # Path to yeast-GEM model
-    yeast_model_path = "../models/yeast-GEM.xml"
+    yeast_model_path = yeast_file_path()
 
     print("\\n1. Loading and Analyzing Yeast-GEM Model")
     print("-" * 40)

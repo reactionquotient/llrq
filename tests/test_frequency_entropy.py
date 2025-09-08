@@ -92,7 +92,7 @@ class TestFFTEntropyMethods:
         # Frequency-domain entropy
         freq_entropy, _ = accountant.entropy_from_x_freq(x_t, dt, L)
 
-        # Should match within numerical integration tolerance (trapezoid vs rectangular rule)
+        # Should match within numerical integration tolerance (trapz vs rectangular rule)
         relative_error = abs(freq_entropy - time_result.sigma_total) / abs(time_result.sigma_total)
         assert relative_error < 0.005, f"Parseval's theorem violated, error: {relative_error}"
 
@@ -176,7 +176,7 @@ class TestFFTEntropyMethods:
         assert "frequency_domain" in validation
         assert "relative_error" in validation
 
-        # Error should be small (accounts for trapezoid vs rectangular integration differences)
+        # Error should be small (accounts for trapz vs rectangular integration differences)
         assert validation["relative_error"] < 0.005, f"Parseval validation failed: {validation['relative_error']}"
 
 
