@@ -41,6 +41,17 @@ from .cvx_control import CVXController, CVXObjectives, CVXConstraints, create_en
 # Genome-scale model utilities
 from .genome_scale import GenomeScaleAnalyzer, load_genome_scale_model, compare_model_sizes
 
+# Estimation utilities
+from .estimation import KMatrixEstimator
+from .utils.physical_bounds import (
+    compute_diffusion_limit,
+    enzyme_to_conductance,
+    validate_physical_consistency,
+    compute_spectral_caps,
+    gershgorin_bounds,
+    estimate_reaction_timescales,
+)
+
 
 # Convenience functions
 def from_model(
@@ -446,6 +457,14 @@ __all__ = [
     "GenomeScaleAnalyzer",
     "load_genome_scale_model",
     "compare_model_sizes",
+    # Estimation utilities
+    "KMatrixEstimator",
+    "compute_diffusion_limit",
+    "enzyme_to_conductance",
+    "validate_physical_consistency",
+    "compute_spectral_caps",
+    "gershgorin_bounds",
+    "estimate_reaction_timescales",
     # Convenience functions
     "from_sbml",
     "simple_reaction",
