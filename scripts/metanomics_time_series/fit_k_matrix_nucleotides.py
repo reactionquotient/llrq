@@ -17,6 +17,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.interpolate import UnivariateSpline
 from scipy.optimize import minimize_scalar
+from scipy.signal import savgol_filter
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.linear_model import Ridge
 import warnings
@@ -88,11 +89,29 @@ class NucleotideKFitter:
 
         return self
 
-    def estimate_derivatives(self, method="finite_diff", smoothing_factor=None):
+    def estimate_derivatives(self, method="savgol", window_pts=7, poly=3, smoothing_factor=None):
         """Estimate time derivatives using various methods."""
-        self.dy_dt = np.zeros_like(self.y)
 
-        if method == "finite_diff":
+        if method == "savgol":
+            # Regrid to uniform time spacing to make SavGol legit
+            t_uniform = np.linspace(self.t.min(), self.t.max(), len(self.t))
+            self.y = np.column_stack([np.interp(t_uniform, self.t, self.y[:, i]) for i in range(self.y.shape[1])])
+            self.t = t_uniform
+            # Filter returns smoothed signal; derivative=True gives poly derivative; need dt scale
+            dt = self.t[1] - self.t[0]
+            self.dy_dt = np.column_stack(
+                [
+                    savgol_filter(self.y[:, i], window_length=window_pts, polyorder=poly, deriv=1, delta=dt, mode="interp")
+                    for i in range(self.y.shape[1])
+                ]
+            )
+
+            print(f"Derivative estimation ({method}):")
+            print(f"  Window points: {window_pts}, Polynomial order: {poly}")
+            print(f"  Uniform time step: {dt:.2f} seconds")
+
+        elif method == "finite_diff":
+            self.dy_dt = np.zeros_like(self.y)
             # Use centered finite differences with irregular spacing
             for i in range(self.y.shape[1]):
                 # Forward difference for first point
@@ -115,6 +134,7 @@ class NucleotideKFitter:
                 self.dy_dt[-1, i] = (self.y[-1, i] - self.y[-2, i]) / (self.t[-1] - self.t[-2])
 
         elif method == "spline":
+            self.dy_dt = np.zeros_like(self.y)
             if smoothing_factor is None:
                 # More conservative smoothing
                 data_range = np.ptp(self.y, axis=0).mean()
@@ -127,12 +147,11 @@ class NucleotideKFitter:
                 except Exception as e:
                     print(f"Warning: Spline fitting failed for reaction {i}: {e}")
                     # Fallback to finite differences
-                    method = "finite_diff"
                     return self.estimate_derivatives(method="finite_diff")
+
         else:
             raise ValueError(f"Unknown derivative method: {method}")
 
-        print(f"Derivative estimation ({method}):")
         print(f"  Mean |dy/dt|: {np.abs(self.dy_dt).mean():.4f}")
         print(f"  Max |dy/dt|: {np.abs(self.dy_dt).max():.4f}")
         if method == "spline" and smoothing_factor is not None:
@@ -140,57 +159,69 @@ class NucleotideKFitter:
 
         return self
 
-    def fit_k_matrix(self, alpha=1e-6, drive_model="zero"):
-        """Fit K matrix using regularized least squares.
-
-        Solves: dy/dt = -K*y + u(t)
+    def fit_k_matrix(self, alpha=1e-6, with_bias=True):
+        """
+        Fit symmetric K via ridge:
+          dy/dt = -K y + b,   K = K.T
+        Solve for params theta = [k11, k12, k22, (b1,b2 optional)]
 
         Parameters:
         - alpha: Ridge regularization parameter
-        - drive_model: 'zero' (u=0) or 'exponential' (u=u0*exp(-t/tau))
+        - with_bias: Whether to include bias terms b1, b2
         """
-        n_times, n_reactions = self.y.shape
+        Y = self.dy_dt  # (T, 2)
+        Y1, Y2 = Y[:, 0], Y[:, 1]
+        y1, y2 = self.y[:, 0], self.y[:, 1]
 
-        if drive_model == "zero":
-            # Simple case: dy/dt = -K*y
-            # Reshape for sklearn: each time point is a sample
-            X = -self.y  # Shape: (n_times, n_reactions)
-            Y = self.dy_dt  # Shape: (n_times, n_reactions)
+        # Build design for symmetric K:
+        #   d1 = -(k11*y1 + k12*y2) + b1
+        #   d2 = -(k12*y1 + k22*y2) + b2
+        A1 = np.column_stack([-y1, -y2, 0.0 * np.ones_like(y1)])  # -> k11,k12,k22
+        A2 = np.column_stack([0.0 * np.ones_like(y1), -y1, -y2])
+        A = np.vstack([A1, A2])  # (2T, 3)
+        rhs = np.concatenate([Y1, Y2])
 
-            # Fit separate ridge regression for each reaction
-            self.K = np.zeros((n_reactions, n_reactions))
-            self.fit_scores = []
-
-            for i in range(n_reactions):
-                ridge = Ridge(alpha=alpha, fit_intercept=False)
-                ridge.fit(X, Y[:, i])
-                self.K[i, :] = ridge.coef_
-                self.fit_scores.append(ridge.score(X, Y[:, i]))
-
-        elif drive_model == "exponential":
-            # More complex: dy/dt = -K*y + u0*exp(-t/tau)
-            # Need to estimate u0 and tau along with K
-            raise NotImplementedError("Exponential drive model not yet implemented")
+        if with_bias:
+            B1 = np.column_stack([np.ones_like(y1), np.zeros_like(y1)])  # b1
+            B2 = np.column_stack([np.zeros_like(y1), np.ones_like(y1)])  # b2
+            B = np.vstack([B1, B2])  # (2T, 2)
+            A_full = np.hstack([A, B])  # (2T, 5)
+            # Ridge normal equations
+            reg = alpha * np.eye(A_full.shape[1])
+            theta = np.linalg.solve(A_full.T @ A_full + reg, A_full.T @ rhs)
+            k11, k12, k22, b1, b2 = theta
         else:
-            raise ValueError(f"Unknown drive model: {drive_model}")
+            reg = alpha * np.eye(3)
+            theta = np.linalg.solve(A.T @ A + reg, A.T @ rhs)
+            k11, k12, k22 = theta
+            b1 = b2 = 0.0
 
-        # Compute predicted dynamics
-        self.dy_dt_pred = -self.y @ self.K.T
+        self.K = np.array([[k11, k12], [k12, k22]])
+        self.b = np.array([b1, b2])
 
-        # Fit quality metrics
-        residuals = self.dy_dt - self.dy_dt_pred
-        self.rmse = np.sqrt(np.mean(residuals**2))
-        self.r2_scores = np.array(self.fit_scores)
+        # Predictions and metrics
+        self.dy_dt_pred = -self.y @ self.K.T + self.b
+        resid = self.dy_dt - self.dy_dt_pred
+        self.rmse = np.sqrt(np.mean(resid**2))
+        self.fit_scores = np.array(
+            [
+                1 - np.var(resid[:, 0]) / np.var(self.dy_dt[:, 0]),
+                1 - np.var(resid[:, 1]) / np.var(self.dy_dt[:, 1]),
+            ]
+        )
 
-        print(f"K matrix fitting results:")
+        print(f"Symmetric K matrix fitting results:")
         print(f"  RMSE: {self.rmse:.5f}")
-        print(f"  R² scores: {self.r2_scores}")
+        print(f"  R² scores: {self.fit_scores}")
         print(f"  Regularization α: {alpha:.2e}")
+        print(f"  With bias: {with_bias}")
+        if with_bias:
+            print(f"  Bias terms: [{b1:.5f}, {b2:.5f}]")
 
         return self
 
-    def cross_validate_regularization(self, alpha_range=None, n_splits=3):
-        """Cross-validate regularization parameter using time series splits."""
+    def cross_validate_regularization(self, alpha_range=None, n_splits=3, with_bias=True):
+        """Cross-validate regularization parameter using time series splits with symmetric K."""
         if alpha_range is None:
             alpha_range = np.logspace(-8, -2, 20)
 
@@ -200,19 +231,50 @@ class NucleotideKFitter:
         for alpha in alpha_range:
             scores = []
             for train_idx, val_idx in tscv.split(self.y):
-                # Fit on training data
-                X_train = -self.y[train_idx]
-                Y_train = self.dy_dt[train_idx]
-                X_val = -self.y[val_idx]
-                Y_val = self.dy_dt[val_idx]
+                # Get training and validation data
+                y_train = self.y[train_idx]
+                dy_dt_train = self.dy_dt[train_idx]
+                y_val = self.y[val_idx]
+                dy_dt_val = self.dy_dt[val_idx]
 
-                # Fit and validate each reaction
+                # Fit symmetric K model on training data
+                Y_train = dy_dt_train
+                Y1_train, Y2_train = Y_train[:, 0], Y_train[:, 1]
+                y1_train, y2_train = y_train[:, 0], y_train[:, 1]
+
+                # Build design matrix for symmetric K
+                A1 = np.column_stack([-y1_train, -y2_train, 0.0 * np.ones_like(y1_train)])
+                A2 = np.column_stack([0.0 * np.ones_like(y1_train), -y1_train, -y2_train])
+                A = np.vstack([A1, A2])
+                rhs = np.concatenate([Y1_train, Y2_train])
+
+                if with_bias:
+                    B1 = np.column_stack([np.ones_like(y1_train), np.zeros_like(y1_train)])
+                    B2 = np.column_stack([np.zeros_like(y1_train), np.ones_like(y1_train)])
+                    B = np.vstack([B1, B2])
+                    A_full = np.hstack([A, B])
+                    reg = alpha * np.eye(A_full.shape[1])
+                    theta = np.linalg.solve(A_full.T @ A_full + reg, A_full.T @ rhs)
+                    k11, k12, k22, b1, b2 = theta
+                else:
+                    reg = alpha * np.eye(3)
+                    theta = np.linalg.solve(A.T @ A + reg, A.T @ rhs)
+                    k11, k12, k22 = theta
+                    b1 = b2 = 0.0
+
+                K_cv = np.array([[k11, k12], [k12, k22]])
+                b_cv = np.array([b1, b2])
+
+                # Predict on validation data
+                dy_dt_pred = -y_val @ K_cv.T + b_cv
+
+                # Compute validation score (R² for each reaction)
                 val_scores = []
-                for i in range(self.y.shape[1]):
-                    ridge = Ridge(alpha=alpha, fit_intercept=False)
-                    ridge.fit(X_train, Y_train[:, i])
-                    val_score = ridge.score(X_val, Y_val[:, i])
-                    val_scores.append(val_score)
+                for i in range(2):
+                    ss_res = np.sum((dy_dt_val[:, i] - dy_dt_pred[:, i]) ** 2)
+                    ss_tot = np.sum((dy_dt_val[:, i] - np.mean(dy_dt_val[:, i])) ** 2)
+                    r2 = 1 - (ss_res / ss_tot) if ss_tot > 1e-10 else 0.0
+                    val_scores.append(r2)
 
                 scores.append(np.mean(val_scores))
             cv_scores.append(np.mean(scores))
@@ -223,7 +285,7 @@ class NucleotideKFitter:
         self.cv_scores = cv_scores
         self.alpha_range = alpha_range
 
-        print(f"Cross-validation results:")
+        print(f"Cross-validation results (symmetric K):")
         print(f"  Best α: {self.best_alpha:.2e}")
         print(f"  Best CV score: {cv_scores[best_idx]:.4f}")
 
@@ -292,9 +354,14 @@ class NucleotideKFitter:
 
         # 4. Derivative fitting
         ax = axes[1, 0]
+        colors = ["orange", "purple"]
         for i, name in enumerate(self.reaction_names):
-            ax.plot(self.t, self.dy_dt[:, i], "o", label=f"{name} (data)", alpha=0.7)
-            ax.plot(self.t, self.dy_dt_pred[:, i], "-", label=f"{name} (fit)")
+            color = colors[i] if i < len(colors) else None
+            ax.plot(self.t, self.dy_dt[:, i], "o", label=f"{name} (data)", alpha=0.7, color=color)
+            line = ax.plot(self.t, self.dy_dt_pred[:, i], "-", label=f"{name} (fit)", color=color)
+            # Show bias if present
+            if hasattr(self, "b") and abs(self.b[i]) > 1e-6:
+                ax.axhline(self.b[i], linestyle=":", alpha=0.5, color=color, label=f"bias={self.b[i]:.4f}")
         ax.set_xlabel("Time (s)")
         ax.set_ylabel("d(ln Q)/dt")
         ax.set_title("Derivative Fitting")
@@ -362,7 +429,7 @@ class NucleotideKFitter:
 
         print(f"\\nFit Quality:")
         print(f"  RMSE: {self.rmse:.5f}")
-        for i, (name, score) in enumerate(zip(self.reaction_names, self.r2_scores)):
+        for i, (name, score) in enumerate(zip(self.reaction_names, self.fit_scores)):
             print(f"  R² ({name}): {score:.4f}")
 
         if hasattr(self, "best_alpha"):
@@ -383,14 +450,14 @@ def main():
     fitter.load_data(csv_path, pulse_id="pulse_1")
     fitter.preprocess_data(t_min=0)
 
-    # Try finite differences first (more stable for noisy data)
-    fitter.estimate_derivatives(method="finite_diff")
+    # Use Savitzky-Golay filter for smoother derivatives (default method)
+    fitter.estimate_derivatives(method="savgol", window_pts=7, poly=3)
 
-    # Cross-validate regularization parameter
-    fitter.cross_validate_regularization(alpha_range=np.logspace(-8, -2, 15))
+    # Cross-validate regularization parameter with symmetric K
+    fitter.cross_validate_regularization(alpha_range=np.logspace(-8, -2, 15), with_bias=True)
 
-    # Fit K matrix with best regularization
-    fitter.fit_k_matrix(alpha=fitter.best_alpha)
+    # Fit symmetric K matrix with bias term and best regularization
+    fitter.fit_k_matrix(alpha=fitter.best_alpha, with_bias=True)
 
     # Analyze results
     fitter.analyze_k_matrix()
