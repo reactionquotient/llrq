@@ -1,2 +1,4 @@
 models/*.xml filter=lfs diff=lfs merge=lfs -text
 models/*.yml filter=lfs diff=lfs merge=lfs -text
+scripts/metanomics_time_series/*.xls filter=lfs diff=lfs merge=lfs -text
+scripts/metanomics_time_series/*.csv filter=lfs diff=lfs merge=lfs -text
