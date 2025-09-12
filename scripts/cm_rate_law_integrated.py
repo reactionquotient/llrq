@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from scipy.integrate import solve_ivp
+from scipy.optimize import curve_fit
 import matplotlib.pyplot as plt
 from datetime import datetime
 import json
@@ -104,3 +105,194 @@ with open(param_path, "w") as f:
     json.dump(params.__dict__, f, indent=2)
 
 csv_paths, param_path.as_posix()
+
+# ============================================================================
+# LLRQ FITTING SECTION
+# ============================================================================
+
+
+def compute_reaction_quotient(A, B, C):
+    """Compute Q = C^2 / (A * B) for reaction A + B <-> 2C"""
+    eps = 1e-10
+    return C**2 / ((A + eps) * (B + eps))
+
+
+def llrq_model(t, ln_Q0, K, ln_Keq):
+    """Simple LLRQ model: ln(Q(t)) = ln(Keq) + (ln(Q0) - ln(Keq)) * exp(-K*t)"""
+    return ln_Keq + (ln_Q0 - ln_Keq) * np.exp(-K * t)
+
+
+def fit_llrq(t, A, B, C):
+    """Fit LLRQ model: d/dt ln(Q) = -K * (ln(Q) - ln(Keq))
+
+    Parameters to fit:
+    - K: relaxation rate
+    - ln_Keq: log equilibrium constant (since true Keq unknown)
+
+    Returns:
+    - K_fit: fitted relaxation rate
+    - Keq_fit: fitted equilibrium constant
+    - ln_Q_fit: fitted ln(Q) values
+    - r_squared: R^2 goodness of fit
+    """
+    # Compute reaction quotients
+    Q = compute_reaction_quotient(A, B, C)
+
+    # Skip initial points where Q is essentially zero (C ~ 0)
+    valid_mask = Q > 1e-10
+    if np.sum(valid_mask) < 10:
+        print("Not enough valid data points for fitting")
+        return None, None, None, None
+
+    t_valid = t[valid_mask]
+    Q_valid = Q[valid_mask]
+    ln_Q = np.log(Q_valid)
+
+    # Initial guesses
+    ln_Q0 = ln_Q[0]
+    ln_Keq_guess = ln_Q[-1]  # Final value as equilibrium estimate
+    K_guess = 0.1
+
+    # Define model for curve_fit (adjust time to start at 0 for valid points)
+    t0 = t_valid[0]
+
+    def model(t_shifted, K, ln_Keq):
+        return llrq_model(t_shifted, ln_Q0, K, ln_Keq)
+
+    try:
+        # Fit the model using shifted time
+        t_shifted = t_valid - t0
+        popt, pcov = curve_fit(model, t_shifted, ln_Q, p0=[K_guess, ln_Keq_guess], maxfev=5000)
+        K_fit, ln_Keq_fit = popt
+
+        # Compute fitted values for ALL original time points
+        # For points before first valid, extrapolate backward
+        ln_Q_fit_full = np.zeros_like(Q)
+        for i, t_i in enumerate(t):
+            if t_i >= t0:
+                ln_Q_fit_full[i] = model(t_i - t0, K_fit, ln_Keq_fit)
+            else:
+                # Extrapolate backward (may not be physically meaningful)
+                ln_Q_fit_full[i] = model(0, K_fit, ln_Keq_fit)  # Use initial value
+
+        # Compute R-squared only on valid points
+        ln_Q_fit_valid = model(t_shifted, K_fit, ln_Keq_fit)
+        ss_res = np.sum((ln_Q - ln_Q_fit_valid) ** 2)
+        ss_tot = np.sum((ln_Q - np.mean(ln_Q)) ** 2)
+        r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+
+        return K_fit, np.exp(ln_Keq_fit), ln_Q_fit_full, r_squared
+    except Exception as e:
+        print(f"Fitting failed: {e}")
+        return None, None, None, None
+
+
+# Fit LLRQ to forward experiment
+print("\n" + "=" * 60)
+print("LLRQ FITTING ANALYSIS")
+print("=" * 60)
+
+t_forward, A_forward, B_forward, C_forward, v_forward = simulate(
+    (t_eval[0], t_eval[-1]), expts["forward"]["y0"], params, t_eval=t_eval
+)
+
+K_fit, Keq_fit, ln_Q_fit, r2 = fit_llrq(t_forward, A_forward, B_forward, C_forward)
+
+if K_fit is not None:
+    print(f"\nForward experiment LLRQ fit:")
+    print(f"  Fitted K (relaxation rate): {K_fit:.4f}")
+    print(f"  Fitted Keq: {Keq_fit:.4e}")
+    print(f"  R-squared: {r2:.4f}")
+
+    # Compute true Keq from CM parameters
+    true_Keq = (params.k_plus / params.k_minus) * (params.kM_C**2) / (params.kM_A * params.kM_B)
+    print(f"  True Keq (from CM params): {true_Keq:.4e}")
+    print(f"  Keq ratio (fitted/true): {Keq_fit/true_Keq:.4f}")
+
+    # Create comparison plot
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+
+    # Plot 1: Concentrations over time
+    ax = axes[0, 0]
+    ax.plot(t_forward, A_forward, "b-", label="A", linewidth=2)
+    ax.plot(t_forward, B_forward, "g-", label="B", linewidth=2)
+    ax.plot(t_forward, C_forward, "r-", label="C", linewidth=2)
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Concentration")
+    ax.set_title("CM Dynamics: Concentrations")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    # Plot 2: Reaction quotient Q over time
+    ax = axes[0, 1]
+    Q = compute_reaction_quotient(A_forward, B_forward, C_forward)
+    ax.plot(t_forward, Q, "k-", linewidth=2, label="Q(t)")
+    ax.axhline(y=Keq_fit, color="r", linestyle="--", label=f"Fitted Keq = {Keq_fit:.2e}")
+    ax.axhline(y=true_Keq, color="b", linestyle=":", label=f"True Keq = {true_Keq:.2e}")
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Reaction Quotient Q")
+    ax.set_title("Reaction Quotient Evolution")
+    ax.set_yscale("log")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    # Plot 3: ln(Q) and LLRQ fit
+    ax = axes[1, 0]
+    # Only plot valid points (where Q > 0)
+    valid_mask = Q > 1e-10
+    if np.any(valid_mask):
+        ln_Q_valid = np.log(Q[valid_mask])
+        t_valid = t_forward[valid_mask]
+        ax.plot(t_valid, ln_Q_valid, "ko", markersize=3, alpha=0.5, label="Data")
+    ax.plot(t_forward, ln_Q_fit, "r-", linewidth=2, label=f"LLRQ fit (K={K_fit:.3f})")
+    ax.set_xlabel("Time")
+    ax.set_ylabel("ln(Q)")
+    ax.set_title(f"LLRQ Fit: ln(Q) vs Time (R² = {r2:.4f})")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    # Plot 4: Residuals
+    ax = axes[1, 1]
+    # Only compute residuals for valid points
+    if np.any(valid_mask):
+        ln_Q_valid = np.log(Q[valid_mask])
+        ln_Q_fit_valid = ln_Q_fit[valid_mask]
+        t_valid = t_forward[valid_mask]
+        residuals = ln_Q_valid - ln_Q_fit_valid
+        ax.plot(t_valid, residuals, "b-", linewidth=1, alpha=0.7)
+        rmse = np.sqrt(np.mean(residuals**2))
+    else:
+        rmse = np.nan
+    ax.axhline(y=0, color="k", linestyle="-", linewidth=0.5)
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Residual (ln(Q) - fit)")
+    ax.set_title("LLRQ Fit Residuals")
+    ax.grid(True, alpha=0.3)
+    ax.text(
+        0.02,
+        0.98,
+        f"RMSE = {rmse:.4f}",
+        transform=ax.transAxes,
+        verticalalignment="top",
+        bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
+    )
+
+    plt.suptitle("CM Dynamics with LLRQ Fitting Analysis", fontsize=14, fontweight="bold")
+    plt.tight_layout()
+
+    # Save figure
+    fig_path = OUT_DIR / "cm_llrq_fitting_analysis.png"
+    plt.savefig(fig_path, dpi=150, bbox_inches="tight")
+    print(f"\nSaved analysis plot to {fig_path}")
+
+    plt.show()
+
+    print("\n" + "=" * 60)
+    print("SUMMARY")
+    print("=" * 60)
+    print("The LLRQ model fits the ln(Q) evolution with a single exponential")
+    print(f"relaxation rate K = {K_fit:.4f} and equilibrium constant Keq = {Keq_fit:.4e}.")
+    print(f"The fit quality (R² = {r2:.4f}) indicates how well the CM dynamics")
+    print("follow LLRQ-like behavior for the reaction quotient evolution.")
+else:
+    print("LLRQ fitting failed.")
