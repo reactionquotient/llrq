@@ -1,0 +1,127 @@
+{
+  "Wiener_unconstrained": {
+    "model_name": "WienerModel",
+    "constrained": false,
+    "params": {
+      "log_alpha": 16.28931580785257,
+      "theta0": -2.933290716186019e-06,
+      "thetaA": -2.659885546246861e-07,
+      "thetaB": -5.699690491758653e-07,
+      "thetaC": -1.6208860572238034e-08
+    },
+    "param_std": {
+      "log_alpha": 2577502.9497852526,
+      "theta0": 7.560575061178994,
+      "thetaA": 0.6855868046587026,
+      "thetaB": 1.4690993084546582,
+      "thetaC": 0.041778465310575184
+    },
+    "metrics": {
+      "rmse": 36.56539281397735,
+      "r2": 0.3641737139494404,
+      "aic": 3020.8244648592854,
+      "bic": 3039.3433772325666
+    },
+    "fit_info": {
+      "n_params": 5,
+      "n_data": 300,
+      "converged": true,
+      "message": "`ftol` termination condition is satisfied."
+    }
+  },
+  "Wiener_constrained": {
+    "model_name": "WienerModel",
+    "constrained": true,
+    "params": {
+      "log_alpha": 0.937412927035717,
+      "w0": -2.677564575170962
+    },
+    "param_std": {
+      "log_alpha": 4.086462236056303,
+      "w0": 11.539111327178416
+    },
+    "metrics": {
+      "rmse": 51.340844764443275,
+      "r2": -0.25349905913971105,
+      "aic": 3218.455097695339,
+      "bic": 3225.8626626446517
+    },
+    "fit_info": {
+      "n_params": 2,
+      "n_data": 300,
+      "converged": true,
+      "message": "`ftol` termination condition is satisfied."
+    }
+  },
+  "Linear_unconstrained": {
+    "model_name": "LinearModel",
+    "constrained": false,
+    "params": {
+      "beta": 19.10066076127648,
+      "theta0": 1.8226916577971795,
+      "thetaA": 0.16528090079403757,
+      "thetaB": 0.35416667435771104,
+      "thetaC": 0.010072021738173006
+    },
+    "param_std": {
+      "beta": 132286091.0449971,
+      "theta0": 12623478.198446363,
+      "thetaA": 1144691.6103465937,
+      "thetaB": 2452864.272804888,
+      "thetaC": 69756.14435608657
+    },
+    "metrics": {
+      "rmse": 36.564218899976815,
+      "r2": 0.3642145390761612,
+      "aic": 3020.805201844376,
+      "bic": 3039.324114217657
+    },
+    "fit_info": {
+      "n_params": 5,
+      "n_data": 300,
+      "converged": true,
+      "message": "`ftol` termination condition is satisfied."
+    }
+  },
+  "Linear_constrained": {
+    "model_name": "LinearModel",
+    "constrained": true,
+    "params": {
+      "beta": -0.2370719964785834,
+      "w0": 8.73003987029535
+    },
+    "param_std": {
+      "beta": 0.4765603068531838,
+      "w0": 38.496013914753256
+    },
+    "metrics": {
+      "rmse": 47.501437849662416,
+      "r2": -0.07302910803311402,
+      "aic": 3171.8191085838007,
+      "bic": 3179.226673533113
+    },
+    "fit_info": {
+      "n_params": 2,
+      "n_data": 300,
+      "converged": true,
+      "message": "`ftol` termination condition is satisfied."
+    }
+  },
+  "data_info": {
+    "n_points": 300,
+    "n_forward": 225,
+    "n_reverse": 75
+  },
+  "true_params": {
+    "seed": 20250912,
+    "u": 0.11995518878446101,
+    "kM_A": 0.1965306993705296,
+    "kM_B": 1.265207750316229,
+    "kM_C": 0.002146066223675083,
+    "keq": 0.06105997556534518,
+    "kV": 27.92650130730963,
+    "k_plus": 1603.4220257913526,
+    "k_minus": 0.4863906462069835,
+    "mechanism": "A + B <-> 2 C (CM rate law, Eq. 3)"
+  }
+}
