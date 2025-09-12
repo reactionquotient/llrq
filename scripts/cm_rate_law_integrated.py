@@ -7,10 +7,9 @@ import pandas as pd
 from scipy.integrate import solve_ivp
 import matplotlib.pyplot as plt
 from datetime import datetime
-from caas_jupyter_tools import display_dataframe_to_user
 import json
 
-OUT_DIR = Path("/mnt/data")
+OUT_DIR = Path("./output")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -84,7 +83,8 @@ for name, spec in expts.items():
     path = OUT_DIR / f"cm_timeseries_{name}_{ts}.csv"
     df.to_csv(path, index=False)
     csv_paths[name] = path.as_posix()
-    display_dataframe_to_user(f"Preview: {name} timeseries", df.head(15))
+    print(f"\nPreview: {name} timeseries")
+    print(df.head(15))
 
 # Quick plot for forward experiment
 t, A, B, C, v = simulate((t_eval[0], t_eval[-1]), expts["forward"]["y0"], params, t_eval=t_eval)
