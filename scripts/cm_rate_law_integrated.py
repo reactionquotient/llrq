@@ -70,7 +70,8 @@ def sample_params(seed=20250912):
 # Parameters & experiments
 params = sample_params()
 
-t_eval = np.linspace(0.0, 200.0, 400)
+# Shorter time range to focus on dynamics (equilibrium reached by t~10)
+t_eval = np.linspace(0.0, 2.5, 200)
 expts = {
     "forward": dict(y0=[1.0 * params.kM_A, 1.0 * params.kM_B, 0.0]),
     "reverse": dict(y0=[0.05 * params.kM_A, 0.05 * params.kM_B, 1.0 * params.kM_C]),
@@ -114,7 +115,16 @@ csv_paths, param_path.as_posix()
 def compute_reaction_quotient(A, B, C):
     """Compute Q = C^2 / (A * B) for reaction A + B <-> 2C"""
     eps = 1e-10
-    return C**2 / ((A + eps) * (B + eps))
+    # Handle case where C is zero (use small positive value for Q)
+    if np.isscalar(C):
+        if C < eps:
+            return eps
+        return C**2 / ((A + eps) * (B + eps))
+    else:
+        # Vectorized version
+        Q = C**2 / ((A + eps) * (B + eps))
+        Q[C < eps] = eps
+        return Q
 
 
 def llrq_model(t, ln_Q0, K, ln_Keq):
@@ -135,53 +145,33 @@ def fit_llrq(t, A, B, C):
     - ln_Q_fit: fitted ln(Q) values
     - r_squared: R^2 goodness of fit
     """
-    # Compute reaction quotients
+    # Compute reaction quotients (now handles C=0 properly)
     Q = compute_reaction_quotient(A, B, C)
-
-    # Skip initial points where Q is essentially zero (C ~ 0)
-    valid_mask = Q > 1e-10
-    if np.sum(valid_mask) < 10:
-        print("Not enough valid data points for fitting")
-        return None, None, None, None
-
-    t_valid = t[valid_mask]
-    Q_valid = Q[valid_mask]
-    ln_Q = np.log(Q_valid)
+    ln_Q = np.log(Q)
 
     # Initial guesses
     ln_Q0 = ln_Q[0]
     ln_Keq_guess = ln_Q[-1]  # Final value as equilibrium estimate
     K_guess = 0.1
 
-    # Define model for curve_fit (adjust time to start at 0 for valid points)
-    t0 = t_valid[0]
-
-    def model(t_shifted, K, ln_Keq):
-        return llrq_model(t_shifted, ln_Q0, K, ln_Keq)
+    # Define model for curve_fit
+    def model(t, K, ln_Keq):
+        return llrq_model(t, ln_Q0, K, ln_Keq)
 
     try:
-        # Fit the model using shifted time
-        t_shifted = t_valid - t0
-        popt, pcov = curve_fit(model, t_shifted, ln_Q, p0=[K_guess, ln_Keq_guess], maxfev=5000)
+        # Fit the model using ALL data points
+        popt, pcov = curve_fit(model, t, ln_Q, p0=[K_guess, ln_Keq_guess], maxfev=5000)
         K_fit, ln_Keq_fit = popt
 
-        # Compute fitted values for ALL original time points
-        # For points before first valid, extrapolate backward
-        ln_Q_fit_full = np.zeros_like(Q)
-        for i, t_i in enumerate(t):
-            if t_i >= t0:
-                ln_Q_fit_full[i] = model(t_i - t0, K_fit, ln_Keq_fit)
-            else:
-                # Extrapolate backward (may not be physically meaningful)
-                ln_Q_fit_full[i] = model(0, K_fit, ln_Keq_fit)  # Use initial value
+        # Compute fitted values
+        ln_Q_fit = model(t, K_fit, ln_Keq_fit)
 
-        # Compute R-squared only on valid points
-        ln_Q_fit_valid = model(t_shifted, K_fit, ln_Keq_fit)
-        ss_res = np.sum((ln_Q - ln_Q_fit_valid) ** 2)
+        # Compute R-squared
+        ss_res = np.sum((ln_Q - ln_Q_fit) ** 2)
         ss_tot = np.sum((ln_Q - np.mean(ln_Q)) ** 2)
         r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
 
-        return K_fit, np.exp(ln_Keq_fit), ln_Q_fit_full, r_squared
+        return K_fit, np.exp(ln_Keq_fit), ln_Q_fit, r_squared
     except Exception as e:
         print(f"Fitting failed: {e}")
         return None, None, None, None
@@ -238,12 +228,8 @@ if K_fit is not None:
 
     # Plot 3: ln(Q) and LLRQ fit
     ax = axes[1, 0]
-    # Only plot valid points (where Q > 0)
-    valid_mask = Q > 1e-10
-    if np.any(valid_mask):
-        ln_Q_valid = np.log(Q[valid_mask])
-        t_valid = t_forward[valid_mask]
-        ax.plot(t_valid, ln_Q_valid, "ko", markersize=3, alpha=0.5, label="Data")
+    ln_Q = np.log(Q)
+    ax.plot(t_forward, ln_Q, "ko", markersize=3, alpha=0.5, label="Data")
     ax.plot(t_forward, ln_Q_fit, "r-", linewidth=2, label=f"LLRQ fit (K={K_fit:.3f})")
     ax.set_xlabel("Time")
     ax.set_ylabel("ln(Q)")
@@ -253,21 +239,16 @@ if K_fit is not None:
 
     # Plot 4: Residuals
     ax = axes[1, 1]
-    # Only compute residuals for valid points
-    if np.any(valid_mask):
-        ln_Q_valid = np.log(Q[valid_mask])
-        ln_Q_fit_valid = ln_Q_fit[valid_mask]
-        t_valid = t_forward[valid_mask]
-        residuals = ln_Q_valid - ln_Q_fit_valid
-        ax.plot(t_valid, residuals, "b-", linewidth=1, alpha=0.7)
-        rmse = np.sqrt(np.mean(residuals**2))
-    else:
-        rmse = np.nan
+    residuals = ln_Q - ln_Q_fit
+    ax.plot(t_forward, residuals, "b-", linewidth=1, alpha=0.7)
     ax.axhline(y=0, color="k", linestyle="-", linewidth=0.5)
     ax.set_xlabel("Time")
     ax.set_ylabel("Residual (ln(Q) - fit)")
     ax.set_title("LLRQ Fit Residuals")
     ax.grid(True, alpha=0.3)
+
+    # Add RMSE to residual plot
+    rmse = np.sqrt(np.mean(residuals**2))
     ax.text(
         0.02,
         0.98,
