@@ -211,3 +211,9 @@ marimo/_lsp/
 __marimo__/
 
 *.png
+
+# Output directories and data files
+output/
+scripts/output/
+scripts/*/output/
+*.csv
