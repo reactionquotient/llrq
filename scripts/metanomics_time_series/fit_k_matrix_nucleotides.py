@@ -12,14 +12,15 @@ The approach:
 4. Fit dynamics: dy/dt = -K*y + u(t) using regularized least squares
 """
 
+import argparse
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.interpolate import UnivariateSpline
-from scipy.optimize import minimize_scalar
 from scipy.signal import savgol_filter
 from sklearn.model_selection import TimeSeriesSplit
-from sklearn.linear_model import Ridge
 import warnings
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -76,8 +77,9 @@ class NucleotideKFitter:
         else:
             raise ValueError(f"Unknown equilibrium method: {equilibrium_method}")
 
-        # Compute log-deviations from equilibrium
-        self.x = np.log(self.c / self.c_eq)
+        # Compute log-deviations from equilibrium (epsilon-safe)
+        eps = 1e-12
+        self.x = np.log(np.maximum(self.c, eps) / np.maximum(self.c_eq, eps))
 
         # Project to reaction space
         self.y = self.x @ self.N  # Shape: (n_times, n_reactions)
@@ -92,22 +94,45 @@ class NucleotideKFitter:
     def estimate_derivatives(self, method="savgol", window_pts=7, poly=3, smoothing_factor=None):
         """Estimate time derivatives using various methods."""
 
+        n = len(self.t)
         if method == "savgol":
+            # Guard rails for Savitzky–Golay settings
+            if n < 3:
+                print("Warning: Not enough points for Savitzky–Golay; falling back to finite differences.")
+                return self.estimate_derivatives(method="finite_diff")
+
+            # Ensure odd window <= n and > poly
+            win = int(window_pts)
+            if win % 2 == 0:
+                win += 1
+            if win > n:
+                win = n if n % 2 == 1 else n - 1
+            if win <= poly:
+                adj_poly = min(poly, max(1, win - 2))
+            else:
+                adj_poly = poly
+
+            if win <= adj_poly:
+                print(
+                    f"Warning: Could not find valid (window, poly) with n={n}. Requested (win={window_pts}, poly={poly}). "
+                    f"Falling back to finite differences."
+                )
+                return self.estimate_derivatives(method="finite_diff")
+
             # Regrid to uniform time spacing to make SavGol legit
-            t_uniform = np.linspace(self.t.min(), self.t.max(), len(self.t))
+            t_uniform = np.linspace(self.t.min(), self.t.max(), n)
             self.y = np.column_stack([np.interp(t_uniform, self.t, self.y[:, i]) for i in range(self.y.shape[1])])
             self.t = t_uniform
-            # Filter returns smoothed signal; derivative=True gives poly derivative; need dt scale
             dt = self.t[1] - self.t[0]
             self.dy_dt = np.column_stack(
                 [
-                    savgol_filter(self.y[:, i], window_length=window_pts, polyorder=poly, deriv=1, delta=dt, mode="interp")
+                    savgol_filter(self.y[:, i], window_length=win, polyorder=adj_poly, deriv=1, delta=dt, mode="interp")
                     for i in range(self.y.shape[1])
                 ]
             )
 
             print(f"Derivative estimation ({method}):")
-            print(f"  Window points: {window_pts}, Polynomial order: {poly}")
+            print(f"  Effective window points: {win}, Polynomial order: {adj_poly}")
             print(f"  Uniform time step: {dt:.2f} seconds")
 
         elif method == "finite_diff":
@@ -159,16 +184,48 @@ class NucleotideKFitter:
 
         return self
 
-    def fit_k_matrix(self, alpha=1e-6, with_bias=True):
+    def _ridge_lstsq(self, D, rhs, alpha, reg_mask=None):
+        """Solve ridge-regularized least squares via stacked system and lstsq.
+
+        Minimizes ||D theta - rhs||^2 + alpha * ||R theta||^2 where R is a diagonal
+        mask (1 for regularized params, 0 otherwise).
+        """
+        n_params = D.shape[1]
+        if reg_mask is None:
+            reg_mask = np.ones(n_params, dtype=float)
+        else:
+            reg_mask = np.asarray(reg_mask, dtype=float)
+            if reg_mask.size != n_params:
+                raise ValueError("reg_mask size must match number of parameters")
+
+        R = np.diag(np.sqrt(alpha) * reg_mask)
+        D_aug = np.vstack([D, R])
+        rhs_aug = np.concatenate([rhs, np.zeros(n_params)])
+        theta, *_ = np.linalg.lstsq(D_aug, rhs_aug, rcond=None)
+        return theta
+
+    def fit_k_matrix(self, alpha=1e-6, with_bias=None, bias_mode="free", regularize_bias=False):
         """
         Fit symmetric K via ridge:
           dy/dt = -K y + b,   K = K.T
-        Solve for params theta = [k11, k12, k22, (b1,b2 optional)]
+        Solve for params theta = [k11, k12, k22, (bias params...)]
 
         Parameters:
         - alpha: Ridge regularization parameter
-        - with_bias: Whether to include bias terms b1, b2
+        - with_bias: Deprecated. If provided, overrides bias_mode ('none' if False, 'free' if True)
+        - bias_mode: One of {'none', 'free', 'antisymmetric'}
+            'none'         -> b = [0, 0]
+            'free'         -> b = [b1, b2] (independent)
+            'antisymmetric'-> b = s * [1, -1]
+        - regularize_bias: If True, apply ridge penalty to bias parameters
         """
+        # Backward compatibility with previous API
+        if with_bias is not None:
+            bias_mode = "free" if with_bias else "none"
+
+        if bias_mode not in {"none", "free", "antisymmetric"}:
+            raise ValueError("bias_mode must be one of {'none','free','antisymmetric'}")
+
         Y = self.dy_dt  # (T, 2)
         Y1, Y2 = Y[:, 0], Y[:, 1]
         y1, y2 = self.y[:, 0], self.y[:, 1]
@@ -181,20 +238,27 @@ class NucleotideKFitter:
         A = np.vstack([A1, A2])  # (2T, 3)
         rhs = np.concatenate([Y1, Y2])
 
-        if with_bias:
+        if bias_mode == "none":
+            D = A
+            reg_mask = np.array([1.0, 1.0, 1.0])
+            theta = self._ridge_lstsq(D, rhs, alpha, reg_mask)
+            k11, k12, k22 = theta
+            b1 = b2 = 0.0
+        elif bias_mode == "free":
             B1 = np.column_stack([np.ones_like(y1), np.zeros_like(y1)])  # b1
             B2 = np.column_stack([np.zeros_like(y1), np.ones_like(y1)])  # b2
             B = np.vstack([B1, B2])  # (2T, 2)
-            A_full = np.hstack([A, B])  # (2T, 5)
-            # Ridge normal equations
-            reg = alpha * np.eye(A_full.shape[1])
-            theta = np.linalg.solve(A_full.T @ A_full + reg, A_full.T @ rhs)
+            D = np.hstack([A, B])  # (2T, 5)
+            reg_mask = np.array([1.0, 1.0, 1.0, float(regularize_bias), float(regularize_bias)])
+            theta = self._ridge_lstsq(D, rhs, alpha, reg_mask)
             k11, k12, k22, b1, b2 = theta
-        else:
-            reg = alpha * np.eye(3)
-            theta = np.linalg.solve(A.T @ A + reg, A.T @ rhs)
-            k11, k12, k22 = theta
-            b1 = b2 = 0.0
+        elif bias_mode == "antisymmetric":
+            s_col = np.concatenate([np.ones_like(y1), -np.ones_like(y1)])[:, None]
+            D = np.hstack([A, s_col])  # (2T, 4)
+            reg_mask = np.array([1.0, 1.0, 1.0, float(regularize_bias)])
+            theta = self._ridge_lstsq(D, rhs, alpha, reg_mask)
+            k11, k12, k22, s = theta
+            b1, b2 = s, -s
 
         self.K = np.array([[k11, k12], [k12, k22]])
         self.b = np.array([b1, b2])
@@ -214,14 +278,19 @@ class NucleotideKFitter:
         print(f"  RMSE: {self.rmse:.5f}")
         print(f"  R² scores: {self.fit_scores}")
         print(f"  Regularization α: {alpha:.2e}")
-        print(f"  With bias: {with_bias}")
-        if with_bias:
+        print(f"  Bias mode: {bias_mode}")
+        if bias_mode != "none":
             print(f"  Bias terms: [{b1:.5f}, {b2:.5f}]")
 
         return self
 
-    def cross_validate_regularization(self, alpha_range=None, n_splits=3, with_bias=True):
-        """Cross-validate regularization parameter using time series splits with symmetric K."""
+    def cross_validate_regularization(self, alpha_range=None, n_splits=3, bias_mode="free", regularize_bias=False):
+        """Cross-validate regularization parameter using time series splits with symmetric K.
+
+        Parameters:
+        - bias_mode: One of {'none','free','antisymmetric'} (see fit_k_matrix)
+        - regularize_bias: If True, include bias parameters in ridge penalty
+        """
         if alpha_range is None:
             alpha_range = np.logspace(-8, -2, 20)
 
@@ -248,19 +317,27 @@ class NucleotideKFitter:
                 A = np.vstack([A1, A2])
                 rhs = np.concatenate([Y1_train, Y2_train])
 
-                if with_bias:
+                if bias_mode == "none":
+                    D = A
+                    reg_mask = np.array([1.0, 1.0, 1.0])
+                    theta = self._ridge_lstsq(D, rhs, alpha, reg_mask)
+                    k11, k12, k22 = theta
+                    b1 = b2 = 0.0
+                elif bias_mode == "free":
                     B1 = np.column_stack([np.ones_like(y1_train), np.zeros_like(y1_train)])
                     B2 = np.column_stack([np.zeros_like(y1_train), np.ones_like(y1_train)])
                     B = np.vstack([B1, B2])
-                    A_full = np.hstack([A, B])
-                    reg = alpha * np.eye(A_full.shape[1])
-                    theta = np.linalg.solve(A_full.T @ A_full + reg, A_full.T @ rhs)
+                    D = np.hstack([A, B])
+                    reg_mask = np.array([1.0, 1.0, 1.0, float(regularize_bias), float(regularize_bias)])
+                    theta = self._ridge_lstsq(D, rhs, alpha, reg_mask)
                     k11, k12, k22, b1, b2 = theta
-                else:
-                    reg = alpha * np.eye(3)
-                    theta = np.linalg.solve(A.T @ A + reg, A.T @ rhs)
-                    k11, k12, k22 = theta
-                    b1 = b2 = 0.0
+                elif bias_mode == "antisymmetric":
+                    s_col = np.concatenate([np.ones_like(y1_train), -np.ones_like(y1_train)])[:, None]
+                    D = np.hstack([A, s_col])
+                    reg_mask = np.array([1.0, 1.0, 1.0, float(regularize_bias)])
+                    theta = self._ridge_lstsq(D, rhs, alpha, reg_mask)
+                    k11, k12, k22, s_param = theta
+                    b1, b2 = s_param, -s_param
 
                 K_cv = np.array([[k11, k12], [k12, k22]])
                 b_cv = np.array([b1, b2])
@@ -437,7 +514,7 @@ class NucleotideKFitter:
             print(f"  Best α: {self.best_alpha:.2e}")
 
 
-def main():
+def legacy_main():
     """Main function to run K matrix fitting analysis."""
     print("LLRQ K Matrix Fitting for Nucleotide Dynamics")
     print("=" * 50)
@@ -454,10 +531,10 @@ def main():
     fitter.estimate_derivatives(method="savgol", window_pts=7, poly=3)
 
     # Cross-validate regularization parameter with symmetric K
-    fitter.cross_validate_regularization(alpha_range=np.logspace(-8, -2, 15), with_bias=True)
+    fitter.cross_validate_regularization(alpha_range=np.logspace(-8, -2, 15), bias_mode="free", regularize_bias=True)
 
     # Fit symmetric K matrix with bias term and best regularization
-    fitter.fit_k_matrix(alpha=fitter.best_alpha, with_bias=True)
+    fitter.fit_k_matrix(alpha=fitter.best_alpha, bias_mode="free", regularize_bias=True)
 
     # Analyze results
     fitter.analyze_k_matrix()
@@ -475,5 +552,109 @@ def main():
     return fitter
 
 
+def main():
+    """Main function to run K matrix fitting analysis with CLI options."""
+    parser = argparse.ArgumentParser(description="LLRQ K Matrix fitting for nucleotide dynamics")
+
+    # Robust default path: CSV next to this script
+    default_csv = Path(__file__).with_suffix("").parent / "nucleotides_timeseries.csv"
+
+    parser.add_argument("--csv-path", type=Path, default=default_csv, help="Path to nucleotides_timeseries.csv")
+    parser.add_argument("--pulse", type=str, default="pulse_1", help="Dataset/pulse identifier (e.g., pulse_1)")
+    parser.add_argument("--t-min", type=float, default=0.0, help="Minimum time (s) to include for analysis")
+    parser.add_argument(
+        "--equilibrium-method",
+        type=str,
+        choices=["last_points", "mean"],
+        default="last_points",
+        help="Method to estimate equilibrium concentrations",
+    )
+    parser.add_argument("--n-eq-points", type=int, default=3, help="Number of last points to average for equilibrium")
+
+    # Derivative estimation
+    parser.add_argument(
+        "--deriv-method",
+        type=str,
+        choices=["savgol", "finite_diff", "spline"],
+        default="savgol",
+        help="Method to estimate time derivatives",
+    )
+    parser.add_argument("--window-pts", type=int, default=7, help="Savitzky–Golay window length (points)")
+    parser.add_argument("--poly", type=int, default=3, help="Savitzky–Golay polynomial order")
+    parser.add_argument("--smoothing-factor", type=float, default=None, help="Spline smoothing factor (if used)")
+
+    # Regularization / CV
+    parser.add_argument("--alpha", type=float, default=None, help="Regularization α (skip CV if provided)")
+    parser.add_argument("--alpha-min", type=float, default=1e-8, help="Min α for CV grid (logspace)")
+    parser.add_argument("--alpha-max", type=float, default=1e-2, help="Max α for CV grid (logspace)")
+    parser.add_argument("--alpha-points", type=int, default=15, help="Number of α points for CV grid")
+    parser.add_argument("--cv-splits", type=int, default=3, help="Number of TimeSeriesSplit folds")
+
+    # Bias handling
+    parser.add_argument(
+        "--bias-mode",
+        type=str,
+        choices=["none", "free", "antisymmetric"],
+        default="free",
+        help="Bias vector mode: none, free, or antisymmetric (b = s*[1,-1])",
+    )
+    parser.add_argument(
+        "--regularize-bias",
+        action="store_true",
+        help="Include bias parameters in ridge regularization",
+    )
+
+    # Output options
+    parser.add_argument("--output-plot", type=Path, default=Path("nucleotide_k_matrix_fit.png"), help="Plot output path")
+    parser.add_argument("--no-show", action="store_true", help="Do not display plots interactively")
+
+    args = parser.parse_args()
+
+    print("LLRQ K Matrix Fitting for Nucleotide Dynamics")
+    print("=" * 50)
+
+    # Initialize fitter
+    fitter = NucleotideKFitter()
+
+    # Load and process data
+    fitter.load_data(args.csv_path, pulse_id=args.pulse)
+    fitter.preprocess_data(t_min=args.t_min, equilibrium_method=args.equilibrium_method, n_eq_points=args.n_eq_points)
+
+    # Derivative estimation
+    fitter.estimate_derivatives(
+        method=args.deriv_method, window_pts=args.window_pts, poly=args.poly, smoothing_factor=args.smoothing_factor
+    )
+
+    # Cross-validate or use provided alpha
+    if args.alpha is None:
+        alpha_range = np.logspace(np.log10(args.alpha_min), np.log10(args.alpha_max), args.alpha_points)
+        fitter.cross_validate_regularization(
+            alpha_range=alpha_range, n_splits=args.cv_splits, bias_mode=args.bias_mode, regularize_bias=args.regularize_bias
+        )
+        alpha_to_use = fitter.best_alpha
+    else:
+        alpha_to_use = args.alpha
+        print(f"Using provided α = {alpha_to_use:.2e} (skipping CV)")
+
+    # Fit K matrix with chosen bias mode
+    fitter.fit_k_matrix(alpha=alpha_to_use, bias_mode=args.bias_mode, regularize_bias=args.regularize_bias)
+
+    # Analyze results
+    fitter.analyze_k_matrix()
+
+    # Print summary
+    fitter.print_summary()
+
+    # Create plots
+    fig = fitter.plot_results()
+    plt.savefig(args.output_plot, dpi=300, bbox_inches="tight")
+    if not args.no_show:
+        plt.show()
+
+    print(f"\nAnalysis complete! Results saved to '{args.output_plot}'")
+
+    return fitter
+
+
 if __name__ == "__main__":
-    fitter = main()
+    fitter = legacy_main()
