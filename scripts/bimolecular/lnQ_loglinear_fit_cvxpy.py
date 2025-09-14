@@ -61,6 +61,7 @@ def fit_lnQ_loglinear_cvx(
     alpha: float = 1e-3,  # smoothness on Dw (Tikhonov)
     beta: float = 1e-6,  # slow-rate penalty ∑ w_i / λ_i (helps separate b)
     gamma_l1: float = 1e-4,  # L1 penalty on w for sparsity (set 0 to disable)
+    cardinality: Optional[int] = None,  # max number of nonzero weights (set None to disable)
     prune_tol: float = 1e-10,  # drop tiny weights (relative to max)
     solver: str = "OSQP",  # "OSQP" (QP) or "SCS"
     solver_kwargs: Optional[dict] = None,
@@ -118,11 +119,12 @@ def fit_lnQ_loglinear_cvx(
     if beta > 0:
         obj += beta * cp.sum(cp.multiply(invlam, w))
     if gamma_l1 > 1:  # don't need norm1 because w >= 0
-        # obj += gamma_l1 * cp.sum(w)
+        obj += gamma_l1 * cp.sum(w)
+    if cardinality is not None and cardinality > 0:
         # add cardinality constraint to help with sparsity
         binary_var = cp.Variable(m, boolean=True)  # big-M binary
         constraints.append(w <= binary_var * 1000)  # big-M
-        constraints.append(cp.sum(binary_var) <= 3)
+        constraints.append(cp.sum(binary_var) <= cardinality)
 
     prob = cp.Problem(cp.Minimize(obj), constraints)  # only w >= 0 constraint is in variable domain
 

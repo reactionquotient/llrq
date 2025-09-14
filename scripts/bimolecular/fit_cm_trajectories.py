@@ -89,6 +89,15 @@ def fit_trajectory_with_different_params(t, ln_Q, true_keq=None):
         {"name": "less_smooth", "m": 60, "alpha": 1e-4, "beta": 1e-6, "gamma_l1": 1e-4, "solver": "MOSEK"},
         {"name": "more_smooth", "m": 60, "alpha": 1e-2, "beta": 1e-6, "gamma_l1": 1e-4, "solver": "MOSEK"},
         {"name": "minimal_sparse", "m": 60, "alpha": 1e-2, "beta": 1e-5, "gamma_l1": 10, "solver": "MOSEK"},
+        {
+            "name": "cardinality_constrained",
+            "m": 60,
+            "alpha": 1e-2,
+            "beta": 1e-5,
+            "gamma_l1": 1e-4,
+            "cardinality": 2,
+            "solver": "MOSEK",
+        },
     ]
 
     for params in param_sets:
@@ -101,6 +110,7 @@ def fit_trajectory_with_different_params(t, ln_Q, true_keq=None):
             alpha=params["alpha"],
             beta=params["beta"],
             gamma_l1=params["gamma_l1"],
+            cardinality=params.get("cardinality", None),
             solver="MOSEK",
         )
         if fit is None:
