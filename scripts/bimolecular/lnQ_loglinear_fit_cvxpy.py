@@ -111,15 +111,20 @@ def fit_lnQ_loglinear_cvx(
     # Objective terms
     residual = A @ w + b * ones.squeeze() - y
     obj = cp.sum_squares(residual)
+    constraints = []
 
     if alpha > 0 and D.size > 0:
         obj += alpha * cp.sum_squares(D @ w)
     if beta > 0:
         obj += beta * cp.sum(cp.multiply(invlam, w))
-    if gamma_l1 > 0:  # don't need norm1 because w >= 0
-        obj += gamma_l1 * cp.sum(w)
+    if gamma_l1 > 1:  # don't need norm1 because w >= 0
+        # obj += gamma_l1 * cp.sum(w)
+        # add cardinality constraint to help with sparsity
+        binary_var = cp.Variable(m, boolean=True)  # big-M binary
+        constraints.append(w <= binary_var * 1000)  # big-M
+        constraints.append(cp.sum(binary_var) <= 3)
 
-    prob = cp.Problem(cp.Minimize(obj), [])  # only w >= 0 constraint is in variable domain
+    prob = cp.Problem(cp.Minimize(obj), constraints)  # only w >= 0 constraint is in variable domain
 
     # Solve
     if solver_kwargs is None:

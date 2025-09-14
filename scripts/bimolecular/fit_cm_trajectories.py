@@ -94,76 +94,32 @@ def fit_trajectory_with_different_params(t, ln_Q, true_keq=None):
     for params in param_sets:
         print(f"\nFitting with {params['name']} parameters:")
         print(f"  m={params['m']}, alpha={params['alpha']:.1e}, beta={params['beta']:.1e}, gamma_l1={params['gamma_l1']:.1e}")
+        fit = fit_lnQ_loglinear_cvx(
+            t,
+            ln_Q,
+            m=params["m"],
+            alpha=params["alpha"],
+            beta=params["beta"],
+            gamma_l1=params["gamma_l1"],
+            solver="MOSEK",
+        )
+        if fit is None:
+            raise RuntimeError("All solvers failed")
 
-        try:
-            # Try MOSEK first if specified, with fallback to OSQP
-            solver_to_use = params["solver"]
-            fit = None
+        results[params["name"]] = {"fit": fit, "params": params, "success": True}
 
-            for attempt, solver in enumerate([solver_to_use, "OSQP"]):
-                if attempt > 0 and solver == solver_to_use:
-                    continue  # Skip if we already tried this solver
+        print(f"  R² = {fit.r2:.4f}")
+        print(
+            f"  Active modes: {fit.active_idx.size}/{fit.lambdas.size} (sparsity: {(1-fit.active_idx.size/fit.lambdas.size)*100:.1f}%)"
+        )
+        print(f"  ln(K_eq) = {fit.b:.4f} -> K_eq = {fit.K_eq():.4e}")
+        if true_keq:
+            print(f"  True K_eq = {true_keq:.4e}, Error = {abs(fit.K_eq() - true_keq)/true_keq*100:.1f}%")
 
-                try:
-                    # Configure solver settings
-                    solver_kwargs = {}
-                    if solver == "MOSEK":
-                        solver_kwargs = {
-                            "mosek_params": {
-                                "MSK_DPAR_INTPNT_QO_TOL_PFEAS": 1e-9,
-                                "MSK_DPAR_INTPNT_QO_TOL_DFEAS": 1e-9,
-                                "MSK_DPAR_INTPNT_QO_TOL_INFEAS": 1e-10,
-                                "MSK_DPAR_INTPNT_QO_TOL_MU_RED": 1e-8,
-                                "MSK_DPAR_INTPNT_QO_TOL_NEAR_REL": 1e3,
-                            }
-                        }
-                    else:  # OSQP
-                        solver_kwargs = {"eps_abs": 1e-8, "eps_rel": 1e-8, "max_iter": 10000, "adaptive_rho": True}
-
-                    # Fit the trajectory with sparsity
-                    fit = fit_lnQ_loglinear_cvx(
-                        t,
-                        ln_Q,
-                        m=params["m"],
-                        alpha=params["alpha"],
-                        beta=params["beta"],
-                        gamma_l1=params["gamma_l1"],
-                        solver=solver,
-                        solver_kwargs=solver_kwargs,
-                    )
-
-                    if attempt > 0:
-                        print(f"  -> Fell back to {solver} solver")
-                    break  # Success, exit the solver loop
-
-                except Exception as solver_error:
-                    if attempt == 0 and solver == "MOSEK":
-                        print(f"  -> MOSEK failed ({str(solver_error)[:50]}...), trying OSQP")
-                        continue
-                    else:
-                        raise solver_error  # Re-raise if OSQP also failed
-
-            if fit is None:
-                raise RuntimeError("All solvers failed")
-
-            results[params["name"]] = {"fit": fit, "params": params, "success": True}
-
-            print(f"  R² = {fit.r2:.4f}")
-            print(
-                f"  Active modes: {fit.active_idx.size}/{fit.lambdas.size} (sparsity: {(1-fit.active_idx.size/fit.lambdas.size)*100:.1f}%)"
-            )
-            print(f"  ln(K_eq) = {fit.b:.4f} -> K_eq = {fit.K_eq():.4e}")
-            if true_keq:
-                print(f"  True K_eq = {true_keq:.4e}, Error = {abs(fit.K_eq() - true_keq)/true_keq*100:.1f}%")
-
-            # Show effect of L1 regularization
-            if params["gamma_l1"] > 0:
-                nonzero_weights = np.sum(fit.w > 1e-8)
-                print(f"  L1 effect: {fit.w.size - nonzero_weights} weights driven to ~0")
-
-        except Exception as e:
-            print(f"  FAILED: {e}")
-            results[params["name"]] = {"fit": None, "params": params, "success": False, "error": str(e)}
+        # Show effect of L1 regularization
+        if params["gamma_l1"] > 0:
+            nonzero_weights = np.sum(fit.w > 1e-8)
+            print(f"  L1 effect: {fit.w.size - nonzero_weights} weights driven to ~0")
 
     return results
 
