@@ -183,6 +183,60 @@ def generate_test_trajectories(params, n_tests=12):
     return test_cases
 
 
+def evaluate_model_on_trajectory_with_refit(trained_fit, t, ln_Q_true, A=None, B=None, C=None, params=None, slope_pts=5):
+    """
+    Predict ln Q on a new trajectory using shared (b, lambdas) but per-trajectory weights.
+    If A,B,C and params are provided, use the CM ODE for the initial slope; otherwise
+    estimate it with a short forward regression on ln Q.
+    """
+    t = np.asarray(t, float).ravel()
+    y = np.asarray(ln_Q_true, float).ravel()
+    assert t.shape == y.shape and t.size >= 3
+
+    # Shared pieces from the trained model
+    b = float(trained_fit.b)
+    # Use the active lambdas from training; make sure we have exactly 2 and they are distinct
+    lam = np.asarray(np.diag(trained_fit.K), float).ravel()
+    if lam.size != 2:
+        raise ValueError("This evaluator assumes a 2-mode model. Found {} modes.".format(lam.size))
+    lam1, lam2 = float(lam[0]), float(lam[1])
+    if abs(lam1 - lam2) < 1e-12:
+        raise ValueError("Degenerate rates: lambda1 ~= lambda2.")
+
+    # x(0) from this trajectory
+    x0 = float(y[0] - b)
+
+    # xdot(0): prefer analytic from CM, else numeric estimate
+    if (A is not None) and (B is not None) and (C is not None) and (params is not None):
+        # CM: y' = d/dt ln Q = 2*(dC/C) - (dA/A) - (dB/B) with dA=-v, dB=-v, dC=2v
+        A0, B0, C0 = float(A[0]), float(B[0]), float(C[0])
+        v0 = rate_cm(A0, B0, C0, params)  # your function above
+        xdot0 = 4.0 * v0 / max(C0, 1e-15) + v0 / max(A0, 1e-15) + v0 / max(B0, 1e-15)
+    else:
+        # robust forward slope via small-window least squares
+        k = min(slope_pts, len(t))
+        tk = t[:k] - t[0]
+        yk = y[:k]
+        # fit y ≈ y0 + s * t on the tiny window
+        Areg = np.vstack([np.ones_like(tk), tk]).T
+        s = np.linalg.lstsq(Areg, yk, rcond=None)[0][1]
+        xdot0 = float(s)  # since b is constant, derivative of x equals derivative of y
+
+    # Solve for per-trajectory weights
+    denom = lam1 - lam2
+    a1 = (-xdot0 - lam2 * x0) / denom
+    a2 = (lam1 * x0 + xdot0) / denom
+
+    # Predict on this trajectory's time grid (origin at its own t[0])
+    tau = t - t[0]
+    ln_Q_pred = b + a1 * np.exp(-lam1 * tau) + a2 * np.exp(-lam2 * tau)
+
+    # Metrics
+    r2 = 1 - np.sum((y - ln_Q_pred) ** 2) / np.sum((y - y.mean()) ** 2)
+    rmse = np.sqrt(np.mean((y - ln_Q_pred) ** 2))
+    return ln_Q_pred, float(r2), float(rmse)
+
+
 def evaluate_model_on_trajectory(trained_fit, t, ln_Q_true):
     """Evaluate trained model on a new trajectory."""
     # Use the trained model parameters to predict ln(Q)
@@ -276,7 +330,7 @@ def reconstruct_concentrations_from_lnQ(t, ln_Q_fit, A_orig, B_orig, C_orig):
     return A_fit, B_fit, C_fit
 
 
-def test_generalization(trained_fit, test_cases):
+def test_generalization(trained_fit, test_cases, params):
     """Test generalization of trained model on test cases."""
     print("\nTesting generalization across different initial conditions...")
 
@@ -287,6 +341,9 @@ def test_generalization(trained_fit, test_cases):
 
         # Apply trained model (no refitting!)
         ln_Q_pred, r2, rmse_lnQ = evaluate_model_on_trajectory(trained_fit, test_case["t"], test_case["ln_Q"])
+        # ln_Q_pred, r2, rmse_lnQ = evaluate_model_on_trajectory_with_refit(
+        #     trained_fit, test_case["t"], test_case["ln_Q"], A=test_case["A"], B=test_case["B"], C=test_case["C"], params=params
+        # )
 
         # Reconstruct concentrations
         A_fit, B_fit, C_fit = reconstruct_concentrations_from_lnQ(
@@ -524,7 +581,7 @@ def main():
 
     # 3. Test generalization
     print(f"\n3. Testing generalization...")
-    results = test_generalization(trained_fit, test_cases)
+    results = test_generalization(trained_fit, test_cases, params)
 
     # 4. Visualization
     print(f"\n4. Creating visualization...")
