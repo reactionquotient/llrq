@@ -244,26 +244,29 @@ def evaluate_model_on_trajectory(trained_fit, t, ln_Q_true):
     active_lambdas = trained_fit.K.diagonal()
     active_weights = trained_fit.z0 / trained_fit.s
 
-    # Compute the exponential decay terms
-    exp_terms = (active_weights[:, np.newaxis] * np.exp(-active_lambdas[:, np.newaxis] * t)).sum(axis=0)
-
     # Get equilibrium value and initial value
     ln_Keq = trained_fit.b  # Equilibrium value from the fit
     ln_Q_initial = ln_Q_true[0]  # Initial value of this trajectory
 
-    # Determine sign based on position relative to equilibrium
-    if ln_Q_initial > ln_Keq:
-        # Starting above equilibrium, should decrease toward equilibrium
-        # exp_terms decay from positive value to 0, so add them to equilibrium
-        ln_Q_pred = ln_Keq + exp_terms
-    else:
-        # Starting below equilibrium, should increase toward equilibrium
-        # exp_terms decay from positive value to 0, so subtract from equilibrium
-        ln_Q_pred = ln_Keq - exp_terms
+    # Calculate initial displacement from equilibrium
+    displacement = ln_Q_initial - ln_Keq
 
-    # Adjust the prediction to match the initial value of this trajectory
-    # Shift the entire trajectory to start at the correct initial point
-    ln_Q_pred = ln_Q_pred - ln_Q_pred[0] + ln_Q_initial
+    # Compute the exponential decay terms that go from 1 to 0
+    # Normalize the weights so they sum to 1 at t=0
+    weight_sum = np.sum(active_weights)
+    if abs(weight_sum) < 1e-12:
+        # Fallback if weights are degenerate
+        normalized_weights = np.ones_like(active_weights) / len(active_weights)
+    else:
+        normalized_weights = active_weights / weight_sum
+
+    # Compute exponential terms that decay from 1 to 0
+    exp_decay = (normalized_weights[:, np.newaxis] * np.exp(-active_lambdas[:, np.newaxis] * t)).sum(axis=0)
+
+    # The correct exponential relaxation model:
+    # ln_Q(t) = ln_Keq + displacement * exp_decay
+    # This naturally converges to ln_Keq as t -> infinity
+    ln_Q_pred = ln_Keq + displacement * exp_decay
 
     # Calculate metrics
     r2 = 1 - np.sum((ln_Q_true - ln_Q_pred) ** 2) / np.sum((ln_Q_true - np.mean(ln_Q_true)) ** 2)
