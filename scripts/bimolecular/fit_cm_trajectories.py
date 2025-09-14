@@ -88,7 +88,7 @@ def fit_trajectory_with_different_params(t, ln_Q, true_keq=None):
         {"name": "more_modes", "m": 100, "alpha": 1e-3, "beta": 1e-6, "gamma_l1": 1e-4, "solver": "MOSEK"},
         {"name": "less_smooth", "m": 60, "alpha": 1e-4, "beta": 1e-6, "gamma_l1": 1e-4, "solver": "MOSEK"},
         {"name": "more_smooth", "m": 60, "alpha": 1e-2, "beta": 1e-6, "gamma_l1": 1e-4, "solver": "MOSEK"},
-        {"name": "minimal_sparse", "m": 30, "alpha": 1e-2, "beta": 1e-5, "gamma_l1": 10, "solver": "MOSEK"},
+        {"name": "minimal_sparse", "m": 60, "alpha": 1e-2, "beta": 1e-5, "gamma_l1": 10, "solver": "MOSEK"},
     ]
 
     for params in param_sets:

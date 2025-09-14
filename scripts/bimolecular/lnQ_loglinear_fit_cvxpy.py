@@ -116,8 +116,8 @@ def fit_lnQ_loglinear_cvx(
         obj += alpha * cp.sum_squares(D @ w)
     if beta > 0:
         obj += beta * cp.sum(cp.multiply(invlam, w))
-    if gamma_l1 > 0:
-        obj += gamma_l1 * cp.norm1(w)
+    if gamma_l1 > 0:  # don't need norm1 because w >= 0
+        obj += gamma_l1 * cp.sum(w)
 
     prob = cp.Problem(cp.Minimize(obj), [])  # only w >= 0 constraint is in variable domain
 
