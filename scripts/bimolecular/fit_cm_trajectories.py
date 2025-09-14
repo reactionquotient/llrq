@@ -95,7 +95,7 @@ def fit_trajectory_with_different_params(t, ln_Q, true_keq=None):
             "alpha": 1e-2,
             "beta": 1e-5,
             "gamma_l1": 1e-4,
-            "cardinality": 2,
+            "cardinality": 2,  # limit to 2 active modes
             "solver": "MOSEK",
         },
     ]
