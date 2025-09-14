@@ -304,9 +304,16 @@ def test_generalization(trained_fit, test_cases, params):
         rmse_B = np.sqrt(np.mean((test_case["B"] - B_fit) ** 2))
         rmse_C = np.sqrt(np.mean((test_case["C"] - C_fit) ** 2))
 
+        # Calculate R² in concentration space (overall for A, B, C combined)
+        # Stack all true and predicted concentrations
+        conc_true = np.hstack([test_case["A"], test_case["B"], test_case["C"]])
+        conc_pred = np.hstack([A_fit, B_fit, C_fit])
+        r2_conc = 1 - np.sum((conc_true - conc_pred) ** 2) / np.sum((conc_true - np.mean(conc_true)) ** 2)
+
         result = {
             "name": test_case["name"],
             "r2": r2,
+            "r2_conc": r2_conc,
             "rmse_lnQ": rmse_lnQ,
             "rmse_A": rmse_A,
             "rmse_B": rmse_B,
@@ -324,7 +331,7 @@ def test_generalization(trained_fit, test_cases, params):
         }
         results.append(result)
 
-        print(f"    R² = {r2:.4f}, RMSE(ln Q) = {rmse_lnQ:.4f}")
+        print(f"    R²(lnQ) = {r2:.4f}, R²(conc) = {r2_conc:.4f}, RMSE(ln Q) = {rmse_lnQ:.4f}")
         print(f"    Concentration RMSE: A={rmse_A:.4f}, B={rmse_B:.4f}, C={rmse_C:.4f}")
 
     return results
@@ -371,7 +378,7 @@ def plot_generalization_results(results):
         ax.plot(result["t"], result["B_fit"], "r--", linewidth=2, label="B (pred)", alpha=0.7)
         ax.plot(result["t"], result["C_fit"], "g--", linewidth=2, label="C (pred)", alpha=0.7)
 
-        ax.set_title(f"{result['name']}\nR²={result['r2']:.3f}")
+        ax.set_title(f"{result['name']}")
         ax.set_xlabel("Time")
         ax.set_ylabel("Concentration")
         if i == 0:  # Only show legend on first subplot to avoid clutter
