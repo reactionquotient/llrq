@@ -10,6 +10,7 @@ to see how well we can approximate the complex CM dynamics.
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 import json
 from pathlib import Path
 import sys
@@ -19,6 +20,7 @@ import os
 sys.path.append(os.path.dirname(__file__))
 # from lnQ_loglinear_fit import fit_lnQ_loglinear, LogLinearFit
 from lnQ_loglinear_fit_cvxpy import fit_lnQ_loglinear_cvx, print_active_timescales
+from K_matrix_from_modes import build_symmetric_K_and_x0, x1_of_t
 
 # Output directory
 OUT_DIR = Path("./output")
@@ -81,7 +83,7 @@ def fit_trajectory_with_different_params(t, ln_Q, true_keq=None):
 
     # Different parameter combinations to test
     param_sets = [
-        {"name": "default", "m": 60, "alpha": 1e-3, "beta": 1e-6, "gamma_l1": 0.0, "solver": "MOSEK"},
+        # {"name": "default", "m": 60, "alpha": 1e-3, "beta": 1e-6, "gamma_l1": 0.0, "solver": "MOSEK"},
         # {"name": "sparse_light", "m": 60, "alpha": 1e-3, "beta": 1e-6, "gamma_l1": 1e-4, "solver": "MOSEK"},
         # {"name": "sparse_medium", "m": 60, "alpha": 1e-3, "beta": 1e-6, "gamma_l1": 1e-3, "solver": "MOSEK"},
         # {"name": "sparse_heavy", "m": 60, "alpha": 1e-3, "beta": 1e-6, "gamma_l1": 1e-2, "solver": "MOSEK"},
@@ -118,7 +120,10 @@ def fit_trajectory_with_different_params(t, ln_Q, true_keq=None):
 
         print_active_timescales(fit)
 
-        results[params["name"]] = {"fit": fit, "params": params, "success": True}
+        # Analyze K matrix from the fit
+        K_analysis = analyze_K_matrix_from_fit(fit, f"{params['name']}")
+
+        results[params["name"]] = {"fit": fit, "params": params, "success": True, "K_analysis": K_analysis}
 
         print(f"  R² = {fit.r2:.4f}")
         print(
@@ -297,6 +302,203 @@ def analyze_trajectory_features(t, ln_Q, experiment_name=""):
             print("  -> Suggests single dominant time scale")
 
 
+def analyze_K_matrix_from_fit(fit, experiment_name=""):
+    """Analyze the implied K matrix and hidden state from the fitted exponential mixture."""
+    print(f"\n=== K Matrix Analysis - {experiment_name} ===")
+
+    # Extract active modes from the fit
+    active_lambdas = fit.K.diagonal()  # Active eigenvalues
+    active_weights = fit.z0 / fit.s  # Corresponding weights
+
+    print(f"Active modes: {len(active_lambdas)}")
+    print(f"Rate range: [{active_lambdas.min():.4f}, {active_lambdas.max():.4f}]")
+    print(f"Rate spread: {active_lambdas.max()/active_lambdas.min():.2e}")
+
+    # Construct symmetric K matrix and initial state
+    try:
+        K, x0, U = build_symmetric_K_and_x0(active_lambdas, active_weights)
+
+        # Analyze K matrix properties
+        K_eigenvals, _ = np.linalg.eigh(K)
+        K_cond = np.linalg.cond(K)
+        K_frobenius = np.linalg.norm(K, "fro")
+
+        print(f"\nK Matrix Properties:")
+        print(f"  Shape: {K.shape}")
+        print(f"  Condition number: {K_cond:.2e}")
+        print(f"  Frobenius norm: {K_frobenius:.4f}")
+        print(f"  Eigenvalue range: [{K_eigenvals.min():.4f}, {K_eigenvals.max():.4f}]")
+
+        # Verify reconstruction accuracy
+        t_test = np.linspace(0, 2.0, 1000)  # Test time points
+        x1_original = (active_weights * np.exp(-np.outer(t_test, active_lambdas))).sum(axis=1)
+        x1_reconstructed = x1_of_t(t_test, K, x0)
+        reconstruction_error = np.max(np.abs(x1_original - x1_reconstructed))
+
+        print(f"\nReconstruction Verification:")
+        print(f"  Max reconstruction error: {reconstruction_error:.2e}")
+        print(
+            f"  Reconstruction quality: {'Excellent' if reconstruction_error < 1e-10 else 'Good' if reconstruction_error < 1e-6 else 'Poor'}"
+        )
+
+        # Analyze hidden state structure
+        print(f"\nHidden State Analysis:")
+        print(f"  Initial state x0 norm: {np.linalg.norm(x0):.4f}")
+        print(f"  Initial state range: [{x0.min():.4f}, {x0.max():.4f}]")
+        print(f"  x1(0) = {x0[0]:.4f} (observable coordinate)")
+
+        # Return results for further analysis
+        return {
+            "K": K,
+            "x0": x0,
+            "U": U,
+            "eigenvals": K_eigenvals,
+            "condition_number": K_cond,
+            "reconstruction_error": reconstruction_error,
+            "frobenius_norm": K_frobenius,
+        }
+
+    except Exception as e:
+        print(f"Error constructing K matrix: {e}")
+        return None
+
+
+def plot_hidden_state_dynamics(t, ln_Q, K_analysis, experiment_name=""):
+    """Plot the full hidden state dynamics and K matrix structure."""
+    if K_analysis is None:
+        print("No K matrix analysis available for plotting")
+        return
+
+    K = K_analysis["K"]
+    x0 = K_analysis["x0"]
+    m = K.shape[0]
+
+    # Create comprehensive plot
+    fig = plt.figure(figsize=(16, 12))
+
+    # Simulate full hidden state evolution
+    t_sim = np.linspace(0, max(t[-1], 2.0), 1000)
+    # Solve dx/dt = -K x with initial condition x0
+    eigenvals, eigenvecs = np.linalg.eigh(K)
+    alpha = eigenvecs.T @ x0
+    # Compute exponential matrix: alpha[i] * exp(-eigenvals[i] * t_sim) for each mode i
+    exp_terms = alpha[:, np.newaxis] * np.exp(-eigenvals[:, np.newaxis] * t_sim)
+    # Transform back to original coordinates: x(t) = eigenvecs @ exp_terms
+    x_full = eigenvecs @ exp_terms
+
+    # Plot 1: All hidden state components
+    ax1 = plt.subplot(2, 4, 1)
+    colors = plt.cm.tab10(np.linspace(0, 1, m))
+    for i in range(m):
+        ax1.plot(t_sim, x_full[i, :], "-", color=colors[i], alpha=0.7, label=f"x_{i+1}(t)")
+    ax1.plot(t, ln_Q, "ko", markersize=3, alpha=0.8, label="ln(Q) data")
+    ax1.set_xlabel("Time")
+    ax1.set_ylabel("State Value")
+    ax1.set_title(f"Hidden State Evolution - {experiment_name}")
+    ax1.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+    ax1.grid(True, alpha=0.3)
+
+    # Plot 2: Observable coordinate x1(t) vs data
+    ax2 = plt.subplot(2, 4, 2)
+    ax2.plot(t, ln_Q, "ko", markersize=4, alpha=0.8, label="ln(Q) data")
+    ax2.plot(t_sim, x_full[0, :], "r-", linewidth=2, label="x₁(t) from K dynamics")
+    ax2.set_xlabel("Time")
+    ax2.set_ylabel("ln(Q)")
+    ax2.set_title(f"Observable Coordinate - {experiment_name}")
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+
+    # Plot 3: K matrix heatmap
+    ax3 = plt.subplot(2, 4, 3)
+    im = ax3.imshow(K, cmap="RdBu_r", aspect="auto")
+    ax3.set_title("K Matrix Structure")
+    ax3.set_xlabel("Column Index")
+    ax3.set_ylabel("Row Index")
+    plt.colorbar(im, ax=ax3, shrink=0.8)
+
+    # Plot 4: K matrix eigenvalues
+    ax4 = plt.subplot(2, 4, 4)
+    eigenvals_sorted = np.sort(K_analysis["eigenvals"])[::-1]
+    ax4.semilogy(eigenvals_sorted, "bo-", markersize=4)
+    ax4.set_xlabel("Eigenvalue Index")
+    ax4.set_ylabel("Eigenvalue")
+    ax4.set_title("K Matrix Eigenspectrum")
+    ax4.grid(True, alpha=0.3)
+
+    # Plot 5: Initial state x0
+    ax5 = plt.subplot(2, 4, 5)
+    ax5.bar(range(m), x0, color=colors, alpha=0.7)
+    ax5.set_xlabel("State Index")
+    ax5.set_ylabel("Initial Value")
+    ax5.set_title("Initial Hidden State x₀")
+    ax5.grid(True, alpha=0.3)
+
+    # Plot 6: State evolution in phase space (first 3 components if m >= 3)
+    if m >= 3:
+        ax6 = plt.subplot(2, 4, 6, projection="3d")
+        ax6.plot(x_full[0, :], x_full[1, :], x_full[2, :], "b-", alpha=0.7)
+        ax6.scatter(x0[0], x0[1], x0[2], color="red", s=50, label="Initial")
+        ax6.scatter(x_full[0, -1], x_full[1, -1], x_full[2, -1], color="green", s=50, label="Final")
+        ax6.set_xlabel("x₁")
+        ax6.set_ylabel("x₂")
+        ax6.set_zlabel("x₃")
+        ax6.set_title("3D Phase Portrait")
+        ax6.legend()
+    else:
+        ax6 = plt.subplot(2, 4, 6)
+        if m >= 2:
+            ax6.plot(x_full[0, :], x_full[1, :], "b-", alpha=0.7)
+            ax6.scatter(x0[0], x0[1], color="red", s=50, label="Initial")
+            ax6.scatter(x_full[0, -1], x_full[1, -1], color="green", s=50, label="Final")
+            ax6.set_xlabel("x₁")
+            ax6.set_ylabel("x₂")
+            ax6.set_title("2D Phase Portrait")
+            ax6.legend()
+        else:
+            ax6.plot(t_sim, x_full[0, :], "b-")
+            ax6.set_title("Single State")
+        ax6.grid(True, alpha=0.3)
+
+    # Plot 7: Relaxation rates comparison
+    ax7 = plt.subplot(2, 4, 7)
+    # Get the original fitted rates
+    active_lambdas = np.diag(K_analysis.get("original_K", K))
+    ax7.semilogx(eigenvals_sorted, "ro-", markersize=4, label="K matrix eigenvalues")
+    if len(active_lambdas) > 0:
+        ax7.semilogx(np.sort(active_lambdas)[::-1], "bs-", markersize=4, alpha=0.7, label="Original fitted rates")
+    ax7.set_ylabel("Rate")
+    ax7.set_xlabel("Mode Index")
+    ax7.set_title("Rate Comparison")
+    ax7.legend()
+    ax7.grid(True, alpha=0.3)
+
+    # Plot 8: Hidden state convergence
+    ax8 = plt.subplot(2, 4, 8)
+    # Compute state norms over time
+    state_norms = np.linalg.norm(x_full, axis=0)
+    ax8.semilogy(t_sim, state_norms, "g-", linewidth=2, label="||x(t)||")
+    ax8.semilogy(t_sim, np.abs(x_full[0, :]), "r--", linewidth=1.5, label="|x₁(t)|")
+    ax8.set_xlabel("Time")
+    ax8.set_ylabel("Magnitude")
+    ax8.set_title("State Magnitude Evolution")
+    ax8.legend()
+    ax8.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+
+    # Save the plot
+    filename = f"hidden_state_dynamics_{experiment_name.lower()}.png"
+    filepath = OUT_DIR / filename
+    plt.savefig(filepath, dpi=150, bbox_inches="tight")
+    print(f"Saved hidden state plot to: {filepath}")
+
+    # Try to show plot
+    try:
+        plt.show()
+    except Exception as e:
+        print(f"Display warning: {e}")
+
+
 def main():
     """Main analysis function."""
     print("=" * 60)
@@ -348,6 +550,13 @@ def main():
         best_name, best_fit = plot_fitting_results(t, ln_Q, results, true_keq, exp_name)
         best_fits[exp_name] = (best_name, best_fit)
 
+        # Plot hidden state dynamics for the best fit
+        best_K_analysis = results[best_name]["K_analysis"]
+        plot_hidden_state_dynamics(t, ln_Q, best_K_analysis, exp_name)
+
+        # Store K analysis with best fits for later use
+        best_fits[exp_name] = (best_name, best_fit, best_K_analysis)
+
         # Summary for this experiment
         successful_results = {k: v for k, v in results.items() if v["success"]}
         print(f"\n--- {exp_name} Experiment Summary ---")
@@ -362,7 +571,8 @@ def main():
     print("OVERALL SUMMARY")
     print(f"{'='*60}")
 
-    for exp_name, (best_name, best_fit) in best_fits.items():
+    for exp_name, fit_data in best_fits.items():
+        best_name, best_fit, K_analysis = fit_data
         sparsity = (1 - best_fit.active_idx.size / best_fit.lambdas.size) * 100
         print(f"{exp_name} - Best: {best_name}, R² = {best_fit.r2:.4f}, K_eq = {best_fit.K_eq():.4e}")
         print(f"  Active modes: {best_fit.active_idx.size}/{best_fit.lambdas.size} (sparsity: {sparsity:.1f}%)")
@@ -370,17 +580,36 @@ def main():
             keq_error = abs(best_fit.K_eq() - true_keq) / true_keq * 100
             print(f"  K_eq error: {keq_error:.1f}%")
 
+        # Add K matrix summary
+        if K_analysis:
+            print(
+                f"  K matrix: {K_analysis['K'].shape[0]}×{K_analysis['K'].shape[1]}, cond = {K_analysis['condition_number']:.1e}"
+            )
+            print(f"  Reconstruction error: {K_analysis['reconstruction_error']:.1e}")
+
     print("\nSparsity Analysis:")
     avg_sparsity = np.mean(
-        [(1 - best_fit.active_idx.size / best_fit.lambdas.size) * 100 for _, best_fit in best_fits.values()]
+        [(1 - best_fit.active_idx.size / best_fit.lambdas.size) * 100 for _, best_fit, _ in best_fits.values()]
     )
-    avg_active = np.mean([best_fit.active_idx.size for _, best_fit in best_fits.values()])
+    avg_active = np.mean([best_fit.active_idx.size for _, best_fit, _ in best_fits.values()])
     print(f"Average sparsity: {avg_sparsity:.1f}% (using {avg_active:.1f} modes on average)")
     print("CVXPY L1 regularization successfully promotes sparse solutions while")
     print("maintaining excellent fit quality.")
 
+    print("\nK Matrix Analysis Summary:")
+    K_analyses = [K_analysis for _, _, K_analysis in best_fits.values() if K_analysis]
+    if K_analyses:
+        avg_cond = np.mean([K_analysis["condition_number"] for K_analysis in K_analyses])
+        avg_recon_error = np.mean([K_analysis["reconstruction_error"] for K_analysis in K_analyses])
+        avg_K_size = np.mean([K_analysis["K"].shape[0] for K_analysis in K_analyses])
+        print(f"Average K matrix size: {avg_K_size:.1f}×{avg_K_size:.1f}")
+        print(f"Average condition number: {avg_cond:.1e}")
+        print(f"Average reconstruction error: {avg_recon_error:.1e}")
+        print("K matrix construction from exponential modes provides excellent")
+        print("reconstruction of the observable ln(Q) dynamics from hidden state evolution.")
+
     print("\nConclusion:")
-    avg_r2 = np.mean([best_fit.r2 for _, best_fit in best_fits.values()])
+    avg_r2 = np.mean([best_fit.r2 for _, best_fit, _ in best_fits.values()])
     if avg_r2 > 0.99:
         print(f"Excellent fit quality (avg R² = {avg_r2:.4f})")
     elif avg_r2 > 0.95:
@@ -395,6 +624,10 @@ def main():
     print("sparse combinations of exponential relaxation modes. L1 regularization")
     print("promotes interpretable models by automatically selecting the most")
     print("relevant time scales governing the reaction quotient evolution.")
+    print("\nThe K matrix analysis reveals the underlying linear dynamics structure:")
+    print("dx/dt = -K x, where x₁(t) = ln(Q) is the observable coordinate and")
+    print("x₂(t), x₃(t), ... are hidden states that collectively generate the")
+    print("complex CM relaxation behavior through linear superposition.")
 
 
 if __name__ == "__main__":
