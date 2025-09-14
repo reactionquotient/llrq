@@ -2,6 +2,7 @@
 import numpy as np
 from dataclasses import dataclass
 from typing import Optional, Sequence
+import pandas as pd
 
 try:
     import cvxpy as cp
@@ -25,6 +26,53 @@ class LogLinearFit:
 
     def K_eq(self) -> float:
         return float(np.exp(self.b))
+
+
+def print_active_timescales(fit: LogLinearFit, prune_tol=1e-6, sort="weight", unit="s") -> pd.DataFrame:
+    """
+    Print timescales for active (non-tiny) weights.
+    Args:
+      fit      : LogLinearFit result
+      prune_tol: keep entries with w > prune_tol * max(w, 1)
+      sort     : "weight", "lambda", or "tau" (1/lambda)
+      unit     : label for time units (purely cosmetic)
+    Returns a DataFrame with the same info.
+    """
+    w = fit.w
+    lam = fit.lambdas
+    assert w.shape == lam.shape and lam.ndim == 1
+
+    mask = w > prune_tol * max(1.0, float(np.max(w)))
+    if not np.any(mask):
+        mask[np.argmax(w)] = True  # keep the largest if everything is tiny
+
+    wA = w[mask]
+    lamA = lam[mask]
+    tau = 1.0 / lamA
+    t12 = np.log(2.0) / lamA
+    frac = wA / wA.sum()
+
+    # sorting
+    if sort == "weight":
+        idx = np.argsort(-wA)
+    elif sort == "lambda":
+        idx = np.argsort(lamA)  # small lambda (slow) first
+    elif sort == "tau":
+        idx = np.argsort(tau)  # short timescale first
+    else:
+        raise ValueError("sort must be one of {'weight','lambda','tau'}")
+    wA, lamA, tau, t12, frac = (arr[idx] for arr in (wA, lamA, tau, t12, frac))
+
+    # pretty print
+    header = f"{'rank':>4}  {'lambda':>12}  {'tau=1/lambda':>14}  {'t1/2':>12}  {'weight':>12}  {'frac':>8}"
+    print(header)
+    print("-" * len(header))
+    for k, (L, T, H, W, F) in enumerate(zip(lamA, tau, t12, wA, frac), 1):
+        print(f"{k:4d}  {L:12.6g}  {T:14.6g}  {H:12.6g}  {W:12.6g}  {F:8.3%}")
+    print(f"\nNote: time units shown as '{unit}'. t1/2 = ln(2)/lambda.")
+
+    df = pd.DataFrame({"lambda": lamA, "tau": tau, "t_half": t12, "weight": wA, "weight_frac": frac})
+    return df
 
 
 def _second_diff_matrix(m: int) -> np.ndarray:

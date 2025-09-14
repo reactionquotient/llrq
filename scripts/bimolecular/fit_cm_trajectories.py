@@ -18,7 +18,7 @@ import os
 # Import the log-linear fitting function
 sys.path.append(os.path.dirname(__file__))
 # from lnQ_loglinear_fit import fit_lnQ_loglinear, LogLinearFit
-from lnQ_loglinear_fit_cvxpy import fit_lnQ_loglinear_cvx, LogLinearFit
+from lnQ_loglinear_fit_cvxpy import fit_lnQ_loglinear_cvx, print_active_timescales
 
 # Output directory
 OUT_DIR = Path("./output")
@@ -82,13 +82,13 @@ def fit_trajectory_with_different_params(t, ln_Q, true_keq=None):
     # Different parameter combinations to test
     param_sets = [
         {"name": "default", "m": 60, "alpha": 1e-3, "beta": 1e-6, "gamma_l1": 0.0, "solver": "MOSEK"},
-        {"name": "sparse_light", "m": 60, "alpha": 1e-3, "beta": 1e-6, "gamma_l1": 1e-4, "solver": "MOSEK"},
-        {"name": "sparse_medium", "m": 60, "alpha": 1e-3, "beta": 1e-6, "gamma_l1": 1e-3, "solver": "MOSEK"},
-        {"name": "sparse_heavy", "m": 60, "alpha": 1e-3, "beta": 1e-6, "gamma_l1": 1e-2, "solver": "MOSEK"},
-        {"name": "more_modes", "m": 100, "alpha": 1e-3, "beta": 1e-6, "gamma_l1": 1e-4, "solver": "MOSEK"},
-        {"name": "less_smooth", "m": 60, "alpha": 1e-4, "beta": 1e-6, "gamma_l1": 1e-4, "solver": "MOSEK"},
-        {"name": "more_smooth", "m": 60, "alpha": 1e-2, "beta": 1e-6, "gamma_l1": 1e-4, "solver": "MOSEK"},
-        {"name": "minimal_sparse", "m": 60, "alpha": 1e-2, "beta": 1e-5, "gamma_l1": 10, "solver": "MOSEK"},
+        # {"name": "sparse_light", "m": 60, "alpha": 1e-3, "beta": 1e-6, "gamma_l1": 1e-4, "solver": "MOSEK"},
+        # {"name": "sparse_medium", "m": 60, "alpha": 1e-3, "beta": 1e-6, "gamma_l1": 1e-3, "solver": "MOSEK"},
+        # {"name": "sparse_heavy", "m": 60, "alpha": 1e-3, "beta": 1e-6, "gamma_l1": 1e-2, "solver": "MOSEK"},
+        # {"name": "more_modes", "m": 100, "alpha": 1e-3, "beta": 1e-6, "gamma_l1": 1e-4, "solver": "MOSEK"},
+        # {"name": "less_smooth", "m": 60, "alpha": 1e-4, "beta": 1e-6, "gamma_l1": 1e-4, "solver": "MOSEK"},
+        # {"name": "more_smooth", "m": 60, "alpha": 1e-2, "beta": 1e-6, "gamma_l1": 1e-4, "solver": "MOSEK"},
+        # {"name": "minimal_sparse", "m": 60, "alpha": 1e-2, "beta": 1e-5, "gamma_l1": 10, "solver": "MOSEK"},
         {
             "name": "cardinality_constrained",
             "m": 60,
@@ -115,6 +115,8 @@ def fit_trajectory_with_different_params(t, ln_Q, true_keq=None):
         )
         if fit is None:
             raise RuntimeError("All solvers failed")
+
+        print_active_timescales(fit)
 
         results[params["name"]] = {"fit": fit, "params": params, "success": True}
 
