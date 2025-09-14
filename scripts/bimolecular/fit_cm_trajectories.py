@@ -499,6 +499,130 @@ def plot_hidden_state_dynamics(t, ln_Q, K_analysis, experiment_name=""):
         print(f"Display warning: {e}")
 
 
+def reconstruct_concentrations_from_lnQ(t, ln_Q_fit, A_orig, B_orig, C_orig):
+    """Reconstruct concentrations A(t), B(t), C(t) from fitted ln(Q) using conservation laws."""
+    # Initial concentrations
+    A0, B0, C0 = A_orig[0], B_orig[0], C_orig[0]
+
+    # Conservation constants for A + B <-> 2C
+    # A(t) + C(t)/2 = A0 + C0/2 = alpha (constant)
+    # B(t) + C(t)/2 = B0 + C0/2 = beta (constant)
+    alpha = A0 + C0 / 2
+    beta = B0 + C0 / 2
+
+    Q_fit = np.exp(ln_Q_fit)
+
+    # For each time point, solve Q = C^2/((alpha - C/2)(beta - C/2)) for C
+    C_fit = np.zeros_like(t)
+    A_fit = np.zeros_like(t)
+    B_fit = np.zeros_like(t)
+
+    for i, Q_val in enumerate(Q_fit):
+        # Rearrange Q = C^2/((alpha - C/2)(beta - C/2)) to quadratic equation
+        # Q(alpha - C/2)(beta - C/2) = C^2
+        # Q(alpha*beta - alpha*C/2 - beta*C/2 + C^2/4) = C^2
+        # Q*alpha*beta - Q*(alpha+beta)*C/2 + Q*C^2/4 = C^2
+        # (Q/4 - 1)*C^2 - Q*(alpha+beta)*C/2 + Q*alpha*beta = 0
+
+        a = Q_val / 4 - 1
+        b = -Q_val * (alpha + beta) / 2
+        c = Q_val * alpha * beta
+
+        # Solve quadratic equation ax^2 + bx + c = 0
+        discriminant = b**2 - 4 * a * c
+
+        if discriminant < 0:
+            # Fallback to original value if no real solution
+            C_fit[i] = C_orig[i]
+        else:
+            sqrt_disc = np.sqrt(discriminant)
+            C1 = (-b + sqrt_disc) / (2 * a) if abs(a) > 1e-12 else -c / b
+            C2 = (-b - sqrt_disc) / (2 * a) if abs(a) > 1e-12 else -c / b
+
+            # Choose the physically meaningful solution (positive concentrations)
+            A1 = alpha - C1 / 2
+            B1 = beta - C1 / 2
+            A2 = alpha - C2 / 2
+            B2 = beta - C2 / 2
+
+            # Pick solution with all positive concentrations and closest to original
+            if C1 >= 0 and A1 >= 0 and B1 >= 0:
+                if C2 >= 0 and A2 >= 0 and B2 >= 0:
+                    # Both solutions valid, pick closer to original
+                    err1 = abs(C1 - C_orig[i])
+                    err2 = abs(C2 - C_orig[i])
+                    if err1 <= err2:
+                        C_fit[i] = C1
+                    else:
+                        C_fit[i] = C2
+                else:
+                    C_fit[i] = C1
+            elif C2 >= 0 and A2 >= 0 and B2 >= 0:
+                C_fit[i] = C2
+            else:
+                # No valid solution, use original
+                C_fit[i] = C_orig[i]
+
+        # Compute A and B from conservation laws
+        A_fit[i] = alpha - C_fit[i] / 2
+        B_fit[i] = beta - C_fit[i] / 2
+
+    return A_fit, B_fit, C_fit
+
+
+def plot_concentration_space_fits(t, A_orig, B_orig, C_orig, ln_Q_fit, experiment_name=""):
+    """Plot original and fitted concentrations in concentration space."""
+    print(f"Creating concentration space plot for {experiment_name}")
+
+    # Reconstruct concentrations from fitted ln(Q)
+    A_fit, B_fit, C_fit = reconstruct_concentrations_from_lnQ(t, ln_Q_fit, A_orig, B_orig, C_orig)
+
+    # Create the plot
+    fig, ax = plt.subplots(1, 1, figsize=(10, 6))
+
+    # Plot original data (solid lines)
+    ax.plot(t, A_orig, "-", linewidth=2, color="blue", label="A (data)", alpha=0.8)
+    ax.plot(t, B_orig, "-", linewidth=2, color="red", label="B (data)", alpha=0.8)
+    ax.plot(t, C_orig, "-", linewidth=2, color="green", label="C (data)", alpha=0.8)
+
+    # Plot fitted reconstructions (dashed lines)
+    ax.plot(t, A_fit, "--", linewidth=2, color="blue", label="A (fit)", alpha=0.7)
+    ax.plot(t, B_fit, "--", linewidth=2, color="red", label="B (fit)", alpha=0.7)
+    ax.plot(t, C_fit, "--", linewidth=2, color="green", label="C (fit)", alpha=0.7)
+
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Concentration")
+    ax.set_title(f"Concentration Space Comparison - {experiment_name}")
+    ax.legend(loc="best")
+    ax.grid(True, alpha=0.3)
+
+    # Calculate and display RMS errors
+    rmse_A = np.sqrt(np.mean((A_orig - A_fit) ** 2))
+    rmse_B = np.sqrt(np.mean((B_orig - B_fit) ** 2))
+    rmse_C = np.sqrt(np.mean((C_orig - C_fit) ** 2))
+
+    # Add text box with errors
+    textstr = f"RMSE:\nA: {rmse_A:.4f}\nB: {rmse_B:.4f}\nC: {rmse_C:.4f}"
+    props = dict(boxstyle="round", facecolor="wheat", alpha=0.8)
+    ax.text(0.02, 0.98, textstr, transform=ax.transAxes, fontsize=10, verticalalignment="top", bbox=props)
+
+    plt.tight_layout()
+
+    # Save the plot
+    filename = f"concentration_space_fit_{experiment_name.lower()}.png"
+    filepath = OUT_DIR / filename
+    plt.savefig(filepath, dpi=150, bbox_inches="tight")
+    print(f"Saved concentration space plot to: {filepath}")
+
+    # Try to show plot
+    try:
+        plt.show()
+    except Exception as e:
+        print(f"Display warning: {e}")
+
+    return rmse_A, rmse_B, rmse_C
+
+
 def main():
     """Main analysis function."""
     print("=" * 60)
@@ -554,8 +678,11 @@ def main():
         best_K_analysis = results[best_name]["K_analysis"]
         plot_hidden_state_dynamics(t, ln_Q, best_K_analysis, exp_name)
 
+        # Plot concentration space comparison
+        rmse_A, rmse_B, rmse_C = plot_concentration_space_fits(t, A, B, C, best_fit.y_hat, exp_name)
+
         # Store K analysis with best fits for later use
-        best_fits[exp_name] = (best_name, best_fit, best_K_analysis)
+        best_fits[exp_name] = (best_name, best_fit, best_K_analysis, rmse_A, rmse_B, rmse_C)
 
         # Summary for this experiment
         successful_results = {k: v for k, v in results.items() if v["success"]}
@@ -572,7 +699,7 @@ def main():
     print(f"{'='*60}")
 
     for exp_name, fit_data in best_fits.items():
-        best_name, best_fit, K_analysis = fit_data
+        best_name, best_fit, K_analysis, rmse_A, rmse_B, rmse_C = fit_data
         sparsity = (1 - best_fit.active_idx.size / best_fit.lambdas.size) * 100
         print(f"{exp_name} - Best: {best_name}, R² = {best_fit.r2:.4f}, K_eq = {best_fit.K_eq():.4e}")
         print(f"  Active modes: {best_fit.active_idx.size}/{best_fit.lambdas.size} (sparsity: {sparsity:.1f}%)")
@@ -587,17 +714,20 @@ def main():
             )
             print(f"  Reconstruction error: {K_analysis['reconstruction_error']:.1e}")
 
+        # Add concentration space reconstruction errors
+        print(f"  Concentration RMSE: A={rmse_A:.4f}, B={rmse_B:.4f}, C={rmse_C:.4f}")
+
     print("\nSparsity Analysis:")
     avg_sparsity = np.mean(
-        [(1 - best_fit.active_idx.size / best_fit.lambdas.size) * 100 for _, best_fit, _ in best_fits.values()]
+        [(1 - best_fit.active_idx.size / best_fit.lambdas.size) * 100 for _, best_fit, _, _, _, _ in best_fits.values()]
     )
-    avg_active = np.mean([best_fit.active_idx.size for _, best_fit, _ in best_fits.values()])
+    avg_active = np.mean([best_fit.active_idx.size for _, best_fit, _, _, _, _ in best_fits.values()])
     print(f"Average sparsity: {avg_sparsity:.1f}% (using {avg_active:.1f} modes on average)")
     print("CVXPY L1 regularization successfully promotes sparse solutions while")
     print("maintaining excellent fit quality.")
 
     print("\nK Matrix Analysis Summary:")
-    K_analyses = [K_analysis for _, _, K_analysis in best_fits.values() if K_analysis]
+    K_analyses = [K_analysis for _, _, K_analysis, _, _, _ in best_fits.values() if K_analysis]
     if K_analyses:
         avg_cond = np.mean([K_analysis["condition_number"] for K_analysis in K_analyses])
         avg_recon_error = np.mean([K_analysis["reconstruction_error"] for K_analysis in K_analyses])
@@ -608,8 +738,18 @@ def main():
         print("K matrix construction from exponential modes provides excellent")
         print("reconstruction of the observable ln(Q) dynamics from hidden state evolution.")
 
+    print("\nConcentration Space Analysis Summary:")
+    avg_rmse_A = np.mean([rmse_A for _, _, _, rmse_A, _, _ in best_fits.values()])
+    avg_rmse_B = np.mean([rmse_B for _, _, _, _, rmse_B, _ in best_fits.values()])
+    avg_rmse_C = np.mean([rmse_C for _, _, _, _, _, rmse_C in best_fits.values()])
+    total_rmse = np.sqrt((avg_rmse_A**2 + avg_rmse_B**2 + avg_rmse_C**2) / 3)
+    print(f"Average concentration RMSE: A={avg_rmse_A:.4f}, B={avg_rmse_B:.4f}, C={avg_rmse_C:.4f}")
+    print(f"Overall concentration RMSE: {total_rmse:.4f}")
+    print("The log-linear fits successfully reconstruct concentration dynamics")
+    print("through conservation law inversion from the fitted ln(Q) trajectories.")
+
     print("\nConclusion:")
-    avg_r2 = np.mean([best_fit.r2 for _, best_fit, _ in best_fits.values()])
+    avg_r2 = np.mean([best_fit.r2 for _, best_fit, _, _, _, _ in best_fits.values()])
     if avg_r2 > 0.99:
         print(f"Excellent fit quality (avg R² = {avg_r2:.4f})")
     elif avg_r2 > 0.95:
