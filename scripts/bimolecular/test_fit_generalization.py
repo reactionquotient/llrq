@@ -183,60 +183,6 @@ def generate_test_trajectories(params, n_tests=12):
     return test_cases
 
 
-def evaluate_model_on_trajectory_with_refit(trained_fit, t, ln_Q_true, A=None, B=None, C=None, params=None, slope_pts=5):
-    """
-    Predict ln Q on a new trajectory using shared (b, lambdas) but per-trajectory weights.
-    If A,B,C and params are provided, use the CM ODE for the initial slope; otherwise
-    estimate it with a short forward regression on ln Q.
-    """
-    t = np.asarray(t, float).ravel()
-    y = np.asarray(ln_Q_true, float).ravel()
-    assert t.shape == y.shape and t.size >= 3
-
-    # Shared pieces from the trained model
-    b = float(trained_fit.b)
-    # Use the active lambdas from training; make sure we have exactly 2 and they are distinct
-    lam = np.asarray(np.diag(trained_fit.K), float).ravel()
-    if lam.size != 2:
-        raise ValueError("This evaluator assumes a 2-mode model. Found {} modes.".format(lam.size))
-    lam1, lam2 = float(lam[0]), float(lam[1])
-    if abs(lam1 - lam2) < 1e-12:
-        raise ValueError("Degenerate rates: lambda1 ~= lambda2.")
-
-    # x(0) from this trajectory
-    x0 = float(y[0] - b)
-
-    # xdot(0): prefer analytic from CM, else numeric estimate
-    if (A is not None) and (B is not None) and (C is not None) and (params is not None):
-        # CM: y' = d/dt ln Q = 2*(dC/C) - (dA/A) - (dB/B) with dA=-v, dB=-v, dC=2v
-        A0, B0, C0 = float(A[0]), float(B[0]), float(C[0])
-        v0 = rate_cm(A0, B0, C0, params)  # your function above
-        xdot0 = 4.0 * v0 / max(C0, 1e-15) + v0 / max(A0, 1e-15) + v0 / max(B0, 1e-15)
-    else:
-        # robust forward slope via small-window least squares
-        k = min(slope_pts, len(t))
-        tk = t[:k] - t[0]
-        yk = y[:k]
-        # fit y ≈ y0 + s * t on the tiny window
-        Areg = np.vstack([np.ones_like(tk), tk]).T
-        s = np.linalg.lstsq(Areg, yk, rcond=None)[0][1]
-        xdot0 = float(s)  # since b is constant, derivative of x equals derivative of y
-
-    # Solve for per-trajectory weights
-    denom = lam1 - lam2
-    a1 = (-xdot0 - lam2 * x0) / denom
-    a2 = (lam1 * x0 + xdot0) / denom
-
-    # Predict on this trajectory's time grid (origin at its own t[0])
-    tau = t - t[0]
-    ln_Q_pred = b + a1 * np.exp(-lam1 * tau) + a2 * np.exp(-lam2 * tau)
-
-    # Metrics
-    r2 = 1 - np.sum((y - ln_Q_pred) ** 2) / np.sum((y - y.mean()) ** 2)
-    rmse = np.sqrt(np.mean((y - ln_Q_pred) ** 2))
-    return ln_Q_pred, float(r2), float(rmse)
-
-
 def evaluate_model_on_trajectory(trained_fit, t, ln_Q_true):
     """Evaluate trained model on a new trajectory."""
     # Use the trained model parameters to predict ln(Q)
@@ -408,6 +354,37 @@ def plot_generalization_results(results):
     filepath1 = OUT_DIR / "generalization_lnQ_grid.png"
     plt.savefig(filepath1, dpi=150, bbox_inches="tight")
     print(f"Saved ln(Q) grid plot to: {filepath1}")
+
+    # Concentration trajectories grid plot
+    fig3 = plt.figure(figsize=(16, 12))
+
+    for i, result in enumerate(results):
+        ax = plt.subplot(3, 4, i + 1)
+
+        # Plot true concentrations (solid lines)
+        ax.plot(result["t"], result["A_true"], "b-", linewidth=2, label="A (true)", alpha=0.8)
+        ax.plot(result["t"], result["B_true"], "r-", linewidth=2, label="B (true)", alpha=0.8)
+        ax.plot(result["t"], result["C_true"], "g-", linewidth=2, label="C (true)", alpha=0.8)
+
+        # Plot predicted concentrations (dashed lines)
+        ax.plot(result["t"], result["A_fit"], "b--", linewidth=2, label="A (pred)", alpha=0.7)
+        ax.plot(result["t"], result["B_fit"], "r--", linewidth=2, label="B (pred)", alpha=0.7)
+        ax.plot(result["t"], result["C_fit"], "g--", linewidth=2, label="C (pred)", alpha=0.7)
+
+        ax.set_title(f"{result['name']}\nR²={result['r2']:.3f}")
+        ax.set_xlabel("Time")
+        ax.set_ylabel("Concentration")
+        if i == 0:  # Only show legend on first subplot to avoid clutter
+            ax.legend(fontsize=6, loc="best")
+        ax.grid(True, alpha=0.3)
+
+    plt.suptitle("Generalization Test: Concentration Predictions vs True Values", fontsize=16)
+    plt.tight_layout()
+
+    # Save concentration plot
+    filepath3 = OUT_DIR / "generalization_concentration_grid.png"
+    plt.savefig(filepath3, dpi=150, bbox_inches="tight")
+    print(f"Saved concentration grid plot to: {filepath3}")
 
     # Performance summary plot
     fig2, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(12, 8))
