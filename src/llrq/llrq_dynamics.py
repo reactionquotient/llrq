@@ -147,10 +147,11 @@ class LLRQDynamics:
         xi_star: float = 1.0,
         delta: float = 1e-3,
         exp_clip: float = 80.0,
+        variant: str = "exp",
     ) -> AcceleratedRelaxationLaw:
         """Fit and enable the accelerated relaxation law using mass action data."""
 
-        law = AcceleratedRelaxationLaw.from_dynamics(self, xi_star=xi_star, delta=delta, exp_clip=exp_clip)
+        law = AcceleratedRelaxationLaw.from_dynamics(self, xi_star=xi_star, delta=delta, exp_clip=exp_clip, variant=variant)
         self.set_relaxation_law(law)
         return law
 
