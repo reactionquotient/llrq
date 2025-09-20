@@ -173,8 +173,18 @@ class MassActionSimulator:
                     products.append((species, int(coeff)))
 
             # Build reaction string
-            reactant_str = " + ".join([f"{coeff}*{species}" if coeff > 1 else species for species, coeff in reactants])
-            product_str = " + ".join([f"{coeff}*{species}" if coeff > 1 else species for species, coeff in products])
+            # Antimony uses space for stoichiometric coefficients, e.g., "2 A + B" (not "2*A")
+            def fmt_stoich(terms):
+                out = []
+                for species, coeff in terms:
+                    if coeff == 1:
+                        out.append(f"{species}")
+                    else:
+                        out.append(f"{int(coeff)} {species}")
+                return " + ".join(out)
+
+            reactant_str = fmt_stoich(reactants)
+            product_str = fmt_stoich(products)
 
             if not reactant_str:
                 reactant_str = "$null"
