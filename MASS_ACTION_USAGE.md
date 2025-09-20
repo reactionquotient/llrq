@@ -83,6 +83,27 @@ print(f"Mode used: {info['mode']}")
 print(f"Equilibrium point: {info['equilibrium_point']}")
 ```
 
+### Accelerated Far-from-Equilibrium Relaxation (Optional)
+
+To capture mass-action-like acceleration far from equilibrium, enable the
+accelerated relaxation law after building the dynamics object (requires
+mass-action metadata):
+
+```python
+dynamics = LLRQDynamics.from_mass_action(
+    network=network,
+    equilibrium_point=c_star,
+    forward_rates=k_plus,
+    backward_rates=k_minus,
+    mode='equilibrium',
+    relaxation_mode='accelerated',  # nonlinear modal relaxation
+)
+
+# The relaxation law can also be enabled post-hoc:
+# dynamics.enable_accelerated_relaxation()
+print(type(dynamics.relaxation_law).__name__)
+```
+
 ## Algorithm Modes
 
 ### Equilibrium Mode (Recommended)

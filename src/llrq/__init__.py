@@ -20,6 +20,7 @@ __email__ = "steven@gridmatic.com"
 from .control import AdaptiveController, ControlledSimulation, LLRQController, design_lqr_controller
 from .frequency_control import FrequencySpaceController
 from .llrq_dynamics import LLRQDynamics
+from .relaxation_law import AcceleratedRelaxationLaw, LinearRelaxationLaw
 from .reaction_network import ReactionNetwork
 
 # Core imports

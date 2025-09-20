@@ -126,12 +126,15 @@ class LLRQSolver:
         x0 = self._P @ x0
         y0 = self._B.T @ x0
 
+        law = self.dynamics.relaxation_law
+        is_linear = getattr(law, "is_linear", True)
+
         # Validate method
         valid_methods = ["analytical", "numerical", "auto"]
         if method not in valid_methods:
             raise ValueError(f"Invalid method '{method}'. Valid methods are: {valid_methods}")
 
-        # Reduced operators
+        # Reduced operators (used for linear relaxation)
         K = self.dynamics.K
         K_red = self._B.T @ K @ self._B
 
@@ -143,7 +146,9 @@ class LLRQSolver:
 
         if method == "auto":
             # Prefer analytical if u is ~constant and K_red is well-conditioned and small
-            if self.dynamics.n_reactions > 10:
+            if not is_linear:
+                method = "numerical"
+            elif self.dynamics.n_reactions > 10:
                 method = "numerical"
             elif not np.allclose(u_red(0.0), u_red(1.0), rtol=1e-3, atol=1e-9):
                 method = "numerical"
@@ -151,6 +156,10 @@ class LLRQSolver:
                 method = "numerical"
             else:
                 method = "analytical"
+
+        if method == "analytical" and not is_linear:
+            warnings.warn("Analytical solver requires linear relaxation; switching to numerical integration.")
+            method = "numerical"
 
         if method == "analytical":
             try:
@@ -172,9 +181,23 @@ class LLRQSolver:
                 success, message = True, "Analytical solution (reduced) computed successfully"
             except Exception as e:
                 warnings.warn(f"Analytical solution failed: {e}. Switching to numerical.")
-                y_t, success, message = self._numerical_solve_reduced(y0, t_eval, K_red, u_red, **kwargs)
+                y_t, success, message = self._numerical_solve_reduced(
+                    y0,
+                    t_eval,
+                    K_red,
+                    u_red,
+                    linear_law=True,
+                    **kwargs,
+                )
         else:
-            y_t, success, message = self._numerical_solve_reduced(y0, t_eval, K_red, u_red, **kwargs)
+            y_t, success, message = self._numerical_solve_reduced(
+                y0,
+                t_eval,
+                K_red if is_linear else None,
+                u_red if is_linear else None,
+                linear_law=is_linear,
+                **kwargs,
+            )
 
         # Map back to full x and then to Q (FIX: Q = Keq * exp(x))
         x_t = (self._B @ y_t.T).T
@@ -297,7 +320,13 @@ class LLRQSolver:
         return "analytical"
 
     def _numerical_solve_reduced(
-        self, y0: np.ndarray, t_eval: np.ndarray, K_red: np.ndarray, u_red: Callable[[float], np.ndarray], **kwargs
+        self,
+        y0: np.ndarray,
+        t_eval: np.ndarray,
+        K_red: Optional[np.ndarray],
+        u_red: Optional[Callable[[float], np.ndarray]],
+        linear_law: bool,
+        **kwargs,
     ) -> Tuple[np.ndarray, bool, str]:
         """Solve reduced system using numerical integration."""
         try:
@@ -310,8 +339,19 @@ class LLRQSolver:
             }
 
             # Define RHS function
-            def rhs(t, x):
-                return -K_red @ x + u_red(t)
+            if linear_law:
+                if K_red is None or u_red is None:
+                    raise ValueError("Linear relaxation requires K_red and u_red")
+
+                def rhs(t, x):
+                    return -K_red @ x + u_red(t)
+
+            else:
+
+                def rhs(t, y):
+                    x_full = self._B @ y
+                    dxdt_full = self.dynamics.dynamics(t, x_full)
+                    return self._B.T @ dxdt_full
 
             # Solve ODE
             sol = solve_ivp(rhs, [t_eval[0], t_eval[-1]], y0, t_eval=t_eval, **options)
@@ -324,9 +364,17 @@ class LLRQSolver:
         except Exception as e:
             # Fallback to simpler method
             try:
+                if linear_law:
 
-                def rhs_odeint(y, t):
-                    return (-K_red @ y + u_red(t)).astype(float)
+                    def rhs_odeint(y, t):
+                        return (-K_red @ y + u_red(t)).astype(float)
+
+                else:
+
+                    def rhs_odeint(y, t):
+                        x_full = self._B @ y
+                        dxdt_full = self.dynamics.dynamics(t, x_full)
+                        return (self._B.T @ dxdt_full).astype(float)
 
                 y_t = odeint(rhs_odeint, y0, t_eval, rtol=kwargs.get("rtol", 1e-6))
                 return y_t, True, "Numerical integration successful (odeint, reduced)"

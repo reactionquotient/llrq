@@ -17,6 +17,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from llrq.llrq_dynamics import LLRQDynamics
 from llrq.reaction_network import ReactionNetwork
+from llrq.relaxation_law import AcceleratedRelaxationLaw
+from llrq.solver import LLRQSolver
 
 
 class TestLLRQDynamicsInitialization:
@@ -500,6 +502,107 @@ class TestFromMassAction:
 
         expected_Keq = k_plus / k_minus
         assert np.allclose(dynamics.Keq, expected_Keq)
+
+
+class TestAcceleratedRelaxation:
+    """Tests for the accelerated relaxation law integration."""
+
+    @staticmethod
+    def _simple_system():
+        network = ReactionNetwork(["A", "B"], ["R1"], np.array([[-1], [1]]))
+        c_star = np.array([1.0, 2.0])
+        k_plus = np.array([2.0])
+        k_minus = np.array([1.0])
+        return network, c_star, k_plus, k_minus
+
+    def test_accelerated_mode_activation(self):
+        network, c_star, k_plus, k_minus = self._simple_system()
+
+        dynamics = LLRQDynamics.from_mass_action(
+            network=network,
+            forward_rates=k_plus,
+            backward_rates=k_minus,
+            initial_concentrations=c_star,
+            relaxation_mode="accelerated",
+        )
+
+        assert isinstance(dynamics.relaxation_law, AcceleratedRelaxationLaw)
+
+        x_small = np.array([1e-4])
+        accelerated = dynamics.dynamics(0.0, x_small)
+        linear = -dynamics.K @ x_small
+        assert np.allclose(accelerated, linear, rtol=5e-3, atol=1e-8)
+
+    def test_accelerated_relaxation_is_faster_far_from_equilibrium(self):
+        network, c_star, k_plus, k_minus = self._simple_system()
+
+        dynamics = LLRQDynamics.from_mass_action(
+            network=network,
+            forward_rates=k_plus,
+            backward_rates=k_minus,
+            initial_concentrations=c_star,
+            relaxation_mode="accelerated",
+        )
+
+        x_large = np.array([2.0])
+        accelerated = dynamics.dynamics(0.0, x_large)
+        linear = -dynamics.K @ x_large
+
+        assert np.abs(accelerated[0]) > np.abs(linear[0])
+
+    def test_solver_with_accelerated_relaxation(self):
+        network, c_star, k_plus, k_minus = self._simple_system()
+
+        dynamics = LLRQDynamics.from_mass_action(
+            network=network,
+            forward_rates=k_plus,
+            backward_rates=k_minus,
+            initial_concentrations=c_star,
+            relaxation_mode="accelerated",
+        )
+
+        solver = LLRQSolver(dynamics)
+        c0 = np.array([1.5, 1.5])
+        result = solver.solve(c0, (0.0, 1.5), method="auto")
+
+        assert result["success"]
+        conc = result["concentrations"]
+        assert conc is not None
+        assert conc.shape[1] == 2
+        assert np.all(conc > 0)
+
+    def test_multi_reaction_energy_decay(self):
+        network = ReactionNetwork(
+            ["A", "B", "C"],
+            ["R1", "R2"],
+            np.array([[-1, 0], [1, -1], [0, 1]]),
+        )
+        c_star = np.array([1.0, 1.5, 0.5])
+        k_plus = np.array([2.0, 1.0])
+        k_minus = np.array([1.0, 2.0])
+
+        dynamics = LLRQDynamics.from_mass_action(
+            network=network,
+            forward_rates=k_plus,
+            backward_rates=k_minus,
+            initial_concentrations=c_star,
+            relaxation_mode="accelerated",
+        )
+
+        mass_info = dynamics.get_mass_action_info()
+        basis = mass_info["dynamics_data"].get("basis")
+        if basis is None:
+            pytest.skip("Basis not available for accelerated relaxation test")
+
+        y = np.array([0.6, -0.3])
+        x = basis @ y
+        dxdt = dynamics.dynamics(0.0, x)
+        assert np.dot(x, dxdt) < -1e-6
+
+        x_small = basis @ (1e-4 * y)
+        dxdt_small = dynamics.dynamics(0.0, x_small)
+        linear_small = -dynamics.K @ x_small
+        assert np.allclose(dxdt_small, linear_small, rtol=5e-3, atol=1e-8)
 
 
 if __name__ == "__main__":

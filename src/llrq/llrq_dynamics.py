@@ -10,16 +10,19 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import numpy as np
 
 from .reaction_network import ReactionNetwork
+from .relaxation_law import AcceleratedRelaxationLaw, LinearRelaxationLaw, RelaxationLaw
 
 
 class LLRQDynamics:
     """Log-linear reaction quotient dynamics system.
 
-    Implements the core dynamics:
-    d/dt ln Q = -K ln(Q/Keq) + u(t)
+    By default implements the linear dynamics:
+        d/dt ln Q = -K ln(Q/Keq) + u(t)
 
     where Q is the vector of reaction quotients, K is the relaxation rate matrix,
-    Keq are equilibrium constants, and u(t) are external drives.
+    Keq are equilibrium constants, and u(t) are external drives. Alternate
+    relaxation laws (e.g., accelerated far-from-equilibrium variants) can be
+    configured via :meth:`set_relaxation_law`.
     """
 
     def __init__(
@@ -28,6 +31,7 @@ class LLRQDynamics:
         equilibrium_constants: Optional[np.ndarray] = None,
         relaxation_matrix: Optional[np.ndarray] = None,
         external_drive: Optional[Callable[[float], np.ndarray]] = None,
+        relaxation_law: Optional[RelaxationLaw] = None,
     ):
         """Initialize log-linear dynamics system.
 
@@ -36,6 +40,7 @@ class LLRQDynamics:
             equilibrium_constants: Equilibrium constants Keq for each reaction
             relaxation_matrix: Relaxation rate matrix K
             external_drive: Function u(t) returning external drives
+            relaxation_law: Optional relaxation law strategy (defaults to linear)
         """
         self.network = network
         self.n_reactions = network.n_reactions
@@ -68,6 +73,10 @@ class LLRQDynamics:
         self._equilibrium_point: Optional[np.ndarray] = None
         self._forward_rates: Optional[np.ndarray] = None
         self._backward_rates: Optional[np.ndarray] = None
+
+        # Relaxation law (defaults to linear response)
+        self._relaxation_law: RelaxationLaw
+        self.set_relaxation_law(relaxation_law or LinearRelaxationLaw())
 
     def _zero_drive(self, t: float) -> np.ndarray:
         """Default zero external drive."""
@@ -104,7 +113,7 @@ class LLRQDynamics:
         return self.Keq * np.exp(x)
 
     def dynamics(self, t: float, x: np.ndarray) -> np.ndarray:
-        """Log-linear dynamics dx/dt = -K*x + u(t).
+        """Evaluate dx/dt using the configured relaxation law.
 
         Args:
             t: Time
@@ -116,8 +125,34 @@ class LLRQDynamics:
         if len(x) != self.n_reactions:
             raise ValueError(f"Expected {self.n_reactions} state variables, " f"got {len(x)}")
 
-        u = self.external_drive(t)
-        return -self.K @ x + u
+        return self._relaxation_law.evaluate(self, t, x)
+
+    def set_relaxation_law(self, relaxation_law: RelaxationLaw) -> None:
+        """Set the relaxation law strategy used for the dynamics."""
+
+        if relaxation_law is None:
+            raise ValueError("relaxation_law must be provided")
+
+        self._relaxation_law = relaxation_law
+        relaxation_law.attach(self)
+
+    @property
+    def relaxation_law(self) -> RelaxationLaw:
+        """Return the current relaxation law."""
+
+        return self._relaxation_law
+
+    def enable_accelerated_relaxation(
+        self,
+        xi_star: float = 1.0,
+        delta: float = 1e-3,
+        exp_clip: float = 80.0,
+    ) -> AcceleratedRelaxationLaw:
+        """Fit and enable the accelerated relaxation law using mass action data."""
+
+        law = AcceleratedRelaxationLaw.from_dynamics(self, xi_star=xi_star, delta=delta, exp_clip=exp_clip)
+        self.set_relaxation_law(law)
+        return law
 
     def analytical_solution(self, x0: np.ndarray, t: np.ndarray) -> np.ndarray:
         """Analytical solution for constant external drive.
@@ -326,6 +361,9 @@ class LLRQDynamics:
         external_drive: Optional[Callable[[float], np.ndarray]] = None,
         reduce_basis: bool = True,
         enforce_symmetry: bool = False,
+        relaxation_mode: str = "linear",
+        relaxation_kwargs: Optional[Dict[str, Any]] = None,
+        relaxation_law: Optional[RelaxationLaw] = None,
     ) -> "LLRQDynamics":
         """Create LLRQDynamics from mass action kinetics.
 
@@ -339,11 +377,9 @@ class LLRQDynamics:
         3. Creates LLRQDynamics instance with computed parameters
         4. Stores mass action metadata for later retrieval
 
-        The resulting dynamics object satisfies:
-            d/dt ln Q = -K ln(Q/Keq) + u(t)
-
-        where the matrix K captures the network's relaxation behavior and
-        coupling between reactions.
+        The resulting dynamics object defaults to the linear relaxation law
+        dx/dt = -K x + u(t), with optional accelerated relaxations available
+        through ``relaxation_mode='accelerated'`` or a custom RelaxationLaw.
 
         **Typical workflow**:
         ```python
@@ -377,6 +413,9 @@ class LLRQDynamics:
             external_drive: External drive function u(t) → array[reactions]
             reduce_basis: Whether to reduce to Im(S^T) basis (recommended)
             enforce_symmetry: Whether to enforce detailed balance symmetry
+            relaxation_mode: 'linear' (default) or 'accelerated' for modal acceleration
+            relaxation_kwargs: Optional keyword arguments passed to the relaxation law factory
+            relaxation_law: Explicit relaxation law instance (overrides relaxation_mode)
 
         Returns:
             LLRQDynamics instance with:
@@ -426,7 +465,16 @@ class LLRQDynamics:
         Keq = k_plus / k_minus
 
         # Create dynamics instance
-        dynamics = cls(network=network, equilibrium_constants=Keq, relaxation_matrix=K_matrix, external_drive=external_drive)
+        if relaxation_law is not None and not isinstance(relaxation_law, RelaxationLaw):
+            raise TypeError("relaxation_law must implement the RelaxationLaw interface")
+
+        dynamics = cls(
+            network=network,
+            equilibrium_constants=Keq,
+            relaxation_matrix=K_matrix,
+            external_drive=external_drive,
+            relaxation_law=relaxation_law,
+        )
 
         # Store additional mass action data
         dynamics._mass_action_data = dynamics_data
@@ -434,6 +482,18 @@ class LLRQDynamics:
         dynamics._equilibrium_point = dynamics_data.get("equilibrium_point", None)
         dynamics._forward_rates = k_plus
         dynamics._backward_rates = k_minus
+
+        if relaxation_law is None:
+            if relaxation_mode.lower() == "linear":
+                pass
+            elif relaxation_mode.lower() == "accelerated":
+                kwargs = relaxation_kwargs or {}
+                dynamics.enable_accelerated_relaxation(**kwargs)
+            else:
+                raise ValueError(
+                    f"Unknown relaxation_mode '{relaxation_mode}'. Use 'linear' or 'accelerated', "
+                    "or supply a custom relaxation_law."
+                )
 
         return dynamics
 
