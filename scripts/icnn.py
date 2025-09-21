@@ -58,8 +58,17 @@ def standardize(train, test):
     return (train - mu) / sd, (test - mu) / sd, (mu, sd)
 
 
-def batched_outer(B):  # (N,d) -> (N,d,d), outer products per row
-    return B.unsqueeze(-1) @ B.unsqueeze(-2)
+def batched_outer(B):
+    """
+    Batched outer products.
+    - If B is (N, d): returns (N, d, d) with per-row outer products.
+    - If B is (N, d, r): returns (N, d, d) with B @ B^T per batch (mobility construction).
+    """
+    if B.dim() == 2:
+        return B.unsqueeze(-1) @ B.unsqueeze(-2)
+    if B.dim() == 3:
+        return B @ B.transpose(1, 2)
+    raise ValueError(f"Unsupported tensor rank for batched_outer: {B.dim()}")
 
 
 # -------------------------------
@@ -79,14 +88,16 @@ class ICNN(nn.Module):
         self.dim = dim
         self.widths = widths
 
-        layers = []
-        in_dim = dim
-        for w in widths:
-            layers.append(nn.Linear(in_dim, w, bias=True))  # Wx x + b
-            # Wz z term added in forward with nonnegativity constraint
-            layers.append(nn.Linear(w, w, bias=False))  # Wz
-            in_dim = w
-        self.layers = nn.ModuleList(layers)
+        # Two-path architecture: z_k = act(Wx_k x + Wz_k z_{k-1}), with Wz_k >= 0
+        self.Wx = nn.ModuleList()
+        self.Wz = nn.ModuleList()
+        prev_w = None
+        for i, w in enumerate(widths):
+            # x-branch always maps from input dim -> w
+            self.Wx.append(nn.Linear(dim, w, bias=True))
+            # z-branch maps from previous width -> w (first layer's Wz unused)
+            in_w = widths[i - 1] if i > 0 else w
+            self.Wz.append(nn.Linear(in_w, w, bias=False))
 
         # Output: Φ(x) = 0.5||Px||^2 + cᵀ z_L + dᵀ x + b0  with c ≥ 0
         self.P = nn.Parameter(torch.randn(dim, dim) * 0.05)
@@ -99,21 +110,19 @@ class ICNN(nn.Module):
 
     def _zero_Wz_bias(self):
         # init Wz to small nonnegatives, biases to 0
-        for i in range(0, len(self.layers), 2):
-            Wz = self.layers[i + 1]
-            nn.init.uniform_(Wz.weight, a=0.0, b=0.01)
+        for i in range(len(self.Wz)):
+            nn.init.uniform_(self.Wz[i].weight, a=0.0, b=0.01)
 
     def forward(self, x):
         # compute z via alternating (Wx x + b) and (Wz z), enforcing Wz >= 0
         act = torch.nn.functional.softplus
-        z = torch.zeros(x.shape[0], self.widths[0], device=x.device)
-        for i in range(0, len(self.layers), 2):
-            Wx = self.layers[i]
-            Wz = self.layers[i + 1]
-            if i == 0:
-                z = act(Wx(x))  # first layer: just x-branch
-            else:
-                z = act(Wx(x) + softplus_pos(Wz.weight) @ z.T).T  # z-branch nonneg
+        # First layer: no z contribution
+        z = act(self.Wx[0](x))
+        # Deeper layers: Wx(x) + Wz(z_prev) with Wz >= 0
+        for i in range(1, len(self.widths)):
+            Wx_i = self.Wx[i]
+            Wz_i = self.Wz[i]
+            z = act(Wx_i(x) + (softplus_pos(Wz_i.weight) @ z.T).T)
         # convex readout
         c = softplus_pos(self.c_raw)  # c >= 0
         quad = 0.5 * (x @ self.P.T).pow(2).sum(dim=1)  # 0.5||Px||^2
@@ -121,9 +130,11 @@ class ICNN(nn.Module):
         return phi
 
     def grad_phi(self, x):
-        x = x.requires_grad_(True)
-        phi = self.forward(x).sum()
-        (g,) = torch.autograd.grad(phi, x, create_graph=True)
+        # Ensure gradient tracking even if called under no_grad
+        with torch.enable_grad():
+            x = x.requires_grad_(True)
+            phi = self.forward(x).sum()
+            (g,) = torch.autograd.grad(phi, x, create_graph=True)
         return g
 
 
