@@ -243,7 +243,7 @@ def rollout(model, x0, dt=0.05, steps=200):
         k4 = model.f(x + dt * k3)
         x = x + (dt / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
         xs.append(x)
-    return torch.stack(xs, dim=0)
+    return torch.stack(xs, dim=0).detach()
 
 
 # -------------------------------

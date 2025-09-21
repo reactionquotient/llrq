@@ -15,7 +15,7 @@ Run inside the Tellurium conda environment:
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from typing import List, Tuple
 
 import numpy as np
@@ -24,6 +24,7 @@ import matplotlib.pyplot as plt
 # Prefer antimony + roadrunner to avoid heavy SciPy imports through tellurium
 import antimony
 import roadrunner
+import os
 
 
 # -------------------------------
@@ -181,6 +182,9 @@ class TrainCfg:
 
 
 def main():
+    # Checkpoint directory (override with ICNN_CKPT_DIR env var)
+    ckpt_dir = os.environ.get("ICNN_CKPT_DIR", os.path.join("output", "icnn_icnn_fit_tellurium"))
+    os.makedirs(ckpt_dir, exist_ok=True)
     # Stoichiometry and rates
     species_ids, reaction_ids, S = chain3_stoichiometry()
     k_plus = np.array([2.0, 1.0, 1.5], dtype=float)
@@ -236,6 +240,23 @@ def main():
     print("Training ICNN on tellurium mass-action (x, xdot) samples...")
     model = icnn.train(model, Xtr_s, Vtr_s, Xval_s, Vval_s, C)
 
+    # Save checkpoint: best φ (restored by train), mobility, normalization and metadata
+    ckpt_path = os.path.join(ckpt_dir, "icnn_best.pth")
+    icnn.torch.save(
+        {
+            "phi_state_dict": model.phi.state_dict(),
+            "mobility_state_dict": model.M.state_dict(),
+            "mu_x": mu_x.detach().cpu(),
+            "sd_x": sd_x.detach().cpu(),
+            "S": S,
+            "k_plus": k_plus,
+            "k_minus": k_minus,
+            "train_cfg": asdict(cfg),
+        },
+        ckpt_path,
+    )
+    print(f"Saved ICNN checkpoint to {ckpt_path}")
+
     # Hold-out rollout test on one IC (mass action reference via Tellurium)
     c0_test = np.array([3.2, 0.22, 0.06, 0.02], dtype=float)
     conc_ref, _ = simulate_mass_action_rr(k_plus, k_minus, c0_test, t_eval)
@@ -245,10 +266,13 @@ def main():
     dt = float(t_eval[1] - t_eval[0])
     x0 = X_true[0:1]
     x0_s = (icnn.torch.tensor(x0, device=icnn.DEVICE).float() - mu_x) / icnn.torch.clamp_min(sd_x, 1e-6)
-    traj_s = icnn.rollout(model, x0_s, dt=dt, steps=len(t_eval) - 1).cpu().numpy()
-    traj_pred = traj_s * sd_x.cpu().numpy() + mu_x.cpu().numpy()
+    traj_s_t = icnn.rollout(model, x0_s, dt=dt, steps=len(t_eval) - 1).squeeze(1)
+    traj_pred_t = traj_s_t * sd_x + mu_x  # unstandardize in torch
+    traj_pred = traj_pred_t.detach().cpu().numpy()
 
-    rmse = float(np.sqrt(np.mean((traj_pred - X_true) ** 2)))
+    # Robust RMSE via torch (avoids numpy ABI quirks in some tellurium envs)
+    X_true_t = icnn.torch.tensor(X_true, device=icnn.DEVICE).float()
+    rmse = float(icnn.torch.sqrt(icnn.torch.mean((traj_pred_t - X_true_t) ** 2)).detach().cpu())
     print(f"\nTrajectory RMSE in x=ln(Q/Keq) (ICNN vs mass action): {rmse:.4f}")
 
     # Plot

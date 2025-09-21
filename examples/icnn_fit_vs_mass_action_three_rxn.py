@@ -263,7 +263,7 @@ def main():
     dt = float(t_eval[1] - t_eval[0])
     x0 = X_true[0:1]
     x0_s = (icnn.torch.tensor(x0, device=icnn.DEVICE).float() - mu_x) / icnn.torch.clamp_min(sd_x, 1e-6)
-    traj_s = icnn.rollout(model, x0_s, dt=dt, steps=len(t_eval) - 1).cpu().numpy()
+    traj_s = icnn.rollout(model, x0_s, dt=dt, steps=len(t_eval) - 1).squeeze(1).cpu().numpy()
     traj_pred = traj_s * sd_x.cpu().numpy() + mu_x.cpu().numpy()  # unstandardize
 
     # Metrics
